@@ -148,7 +148,7 @@ flowchart LR
 | Case Law k-NN + human override vectors | 🔜 Planned | pgvector + worker extension |
 | Trust Economy pool + contagion decay | 🔜 Planned | Redis + worker + dashboard viz |
 
-The **vision is fully specified** in [SENTINEL_ARCHITECTURAL_INSIGHTS.md](./SENTINEL_ARCHITECTURAL_INSIGHTS.md). The **prototype proves the immutable ledger and control plane**; Case Law and Trust Economy are the differentiated story and natural next layers on the same event stream.
+The **prototype proves the immutable ledger and control plane**; Case Law and Trust Economy are the differentiated story and natural next layers on the same event stream.
 
 ---
 
@@ -188,18 +188,6 @@ npm run dev
 
 Open the URL Vite prints (typically `http://localhost:5173`). The dashboard polls for live logs and falls back to demo data until the API gateway is connected.
 
----
-
-## Demo Script for Judges
-
-| Step | What to show | What to say |
-| :---: | :--- | :--- |
-| 1 | Dashboard audit table with hash column | *"Every agent action is cryptographically stamped — tamper-evident governance memory."* |
-| 2 | Explain Case Law (slide or README diagram) | *"Borderline actions don't hit a magic threshold — they match prior human rulings with citations."* |
-| 3 | Explain Trust Economy contagion | *"One rogue agent doesn't just hurt itself — it tightens the shared risk pool for correlated agents."* |
-| 4 | Press **Emergency Stop** | *"Instant fleet freeze — passport visas revoked, traffic halted."* |
-
-Full slide deck: [presentation_draft.md](./presentation_draft.md)
 
 ---
 
@@ -210,17 +198,9 @@ sentinel/
 ├── casbin_policies/          # RBAC model + policy rules
 ├── dashboard/                # React operator console
 ├── python_workers/           # Async audit + (future) case law / trust math
-├── docker-compose.yml        # Postgres, Redis, Redpanda
-├── presentation_draft.md     # Hackathon slide content
-└── SENTINEL_ARCHITECTURAL_INSIGHTS.md
+└── docker-compose.yml        # Postgres, Redis, Redpanda
 ```
 
----
-
-## Further Reading
-
-- **[Architectural Insights](./SENTINEL_ARCHITECTURAL_INSIGHTS.md)** — deep dive on Case Law, Trust Economy, and polyglot design  
-- **[Presentation Draft](./presentation_draft.md)** — judge-ready slides with speaker notes  
 
 ---
 
