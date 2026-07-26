@@ -1,84 +1,230 @@
-# 🛡️ SENTINEL: The KYA (Know Your Agent) Identity Platform
+# SENTINEL — Know Your Agent (KYA) Governance Platform
 
-[![Theme](https://img.shields.io/badge/Theme-Governance_Layer_for_Financial_Agents-blue.svg)](#)
-[![Identity](https://img.shields.io/badge/Identity-KYA_(Know_Your_Agent)-purple.svg)](#)
-[![Architecture](https://img.shields.io/badge/Architecture-Polyglot_Microservices-purple.svg)](#)
-[![Status](https://img.shields.io/badge/Status-Active_Development-orange.svg)](#)
+[![Theme](https://img.shields.io/badge/Theme-Governance_for_Financial_Agents-2563eb)](#)
+[![Identity](https://img.shields.io/badge/Identity-KYA_(Know_Your_Agent)-7c3aed)](#)
+[![Architecture](https://img.shields.io/badge/Architecture-Polyglot_Microservices-0ea5e9)](#)
+[![Status](https://img.shields.io/badge/Status-Hackathon_Prototype-f97316)](#)
 
-> **"Just like banks have KYC for humans, SENTINEL introduces KYA (Know Your Agent): A cryptographic, precedent-based Digital Passport for AI fleets."**
+> **"Banks have KYC for humans. SENTINEL introduces KYA — a cryptographic Digital Passport, precedent-based Case Law, and a systemic Trust Economy for AI fleets."**
 
----
-
-## 📖 Executive Summary
-As financial institutions deploy autonomous AI agents, the attack surface expands exponentially. Traditional API Gateways enforce static network limits, effectively giving an AI a "blank check" once authorized. 
-
-SENTINEL replaces this broken model with a fundamentally new AI Identity System. By issuing every agent a **Cryptographic Passport**, building a **Precedent-Based Governance** engine (Case Law), and treating AI risk as a systemic **Trust Economy**, SENTINEL guarantees that autonomous fleets operate safely, explainably, and predictably.
+**Jump to:** [Why SENTINEL](#-why-sentinel-exists) · [Three Innovations](#-three-core-innovations) · [How It Works](#-how-a-decision-flows) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [Demo Script](#-demo-script-for-judges) · [Roadmap](#-built-today--next-up)
 
 ---
 
-## 🛂 Core Innovation 1: The KYA Digital Passport
-The fundamental flaw of current AI safety tools is that they govern *requests* in isolation. SENTINEL governs the *Identity*.
+## Why SENTINEL Exists
 
-*   **Passport Issuance:** Every AI is issued a Digital Passport containing its role, risk budget, and Visa Status (e.g., *Full Autonomy*, *Human Quarantine*).
-*   **Cryptographic Stamps (Immutable Memory):** Every financial decision the AI makes is cryptographically "stamped" into its passport using **SHA-256 Hash-Chaining** directly in PostgreSQL. The AI develops an immutable Governance Memory that cannot be forged or wiped.
+Financial institutions are deploying autonomous AI agents to move money, resolve disputes, and act on customer data. Today's guardrails answer one question:
 
----
+> *"Does this agent have permission to call this API?"*
 
-## ⚖️ Core Innovation 2: Governance Case Law (Precedents over Thresholds)
-Standard anomaly detection systems rely on arbitrary thresholds (e.g., "Block if anomaly > 80%"). This is unexplainable and fragile. SENTINEL replaces static math with **Precedent-Based Governance**.
+That is not enough. A permitted agent can still hallucinate, drift, or behave dangerously **within** its limits. Static API keys and threshold-based anomaly scores do not explain *why* a decision was made — and they treat each agent in isolation, ignoring **systemic contagion** across a fleet.
 
-When a complex or borderline AI action occurs, SENTINEL vectorizes the payload (Amount, Time, Sequence, Agent) and performs a nearest-neighbor similarity search against the immutable passport ledger.
-*   **The Decision:** SENTINEL asks, *"The last 3 times an agent tried something similar, what did the human managers do?"*
-*   **Explainable AI:** Instead of returning "Denied: 97% Anomaly," SENTINEL returns: *"Approved: Matches Case #4821 where a human approved a similar refund for a known repeat customer."* The audit log is no longer passive; it is the active decision engine.
+SENTINEL reframes AI governance around three ideas banks already understand: **identity (passport)**, **precedent (case law)**, and **systemic risk (trust economy)**.
 
 ---
 
-## 🏦 Core Innovation 3: The Trust Economy (Systemic Risk Management)
-Cybersecurity treats risk individually. Banks treat risk systemically. SENTINEL models AI autonomy as a shared **Trust Economy**.
+## Three Core Innovations
 
-*   **The Risk Pool:** AI agents do not have isolated trust scores. They draw from a shared, finite "Risk Budget" across the entire fleet.
-*   **Contagion Response:** If one agent begins hallucinating or acting maliciously, it does not just quarantine itself. SENTINEL identifies the systemic risk and tightens the collective budget. Other agents utilizing similar models or prompts instantly experience a contraction in their autonomy, mathematically preventing correlated failures across the bank.
+### 1. KYA Digital Passport — govern identity, not just requests
 
----
+| Traditional guardrails | SENTINEL KYA Passport |
+| :--- | :--- |
+| Static API key = permanent blank check | Every agent carries a living passport (role, visa status, risk budget) |
+| Audit logs are write-only archives | Every decision is **SHA-256 hash-chained** into immutable governance memory |
+| Past behavior can be ignored | The passport is the agent's verifiable history — it cannot be forged or wiped |
 
-## 🏗️ High-Speed Polyglot Architecture
-To ensure the Passport system does not introduce unacceptable latency to the banking core, SENTINEL utilizes a heavily decoupled architecture:
-
-1. **The Checkpoint (Go Gateway):** The edge of the network is governed by a lightweight Go API Gateway. It queries Redis to check passport Visa Status and enforce the Trust Economy in `< 1ms`.
-2. **The Immigration Office (Python Workers):** The heavy mathematics—Hash-Chaining, Vector Embeddings for Case Law, and Trust Pool recalculations—are offloaded asynchronously via Redpanda (Kafka). Python workers process these in the background without slowing down the hot-path.
+**Visa statuses** (examples): `FULL_AUTONOMY` · `HUMAN_QUARANTINE` · `FROZEN`
 
 ---
 
-## 🛠️ Technology Stack
-| Component | Technology | Responsibility |
+### 2. Governance Case Law — precedents instead of thresholds
+
+**The shift:** Stop deciding with `if anomaly_score > 0.8 → block`. Start deciding with *"what did humans do the last times this looked similar?"*
+
+```
+Old model                          SENTINEL Case Law
+──────────                         ─────────────────
+Raw score → threshold → block      Event → vector → k-NN over past rulings → decision + citation
+"Denied: 97% anomaly"              "Approved: matches Case #4821 — human approved similar refund for repeat customer"
+Audit log = passive record         Audit log = active decision input (no model retraining)
+```
+
+**How it works (concept):**
+
+1. Every action — especially every **human override** in quarantine — is embedded as a vector: amount, time, sequence, agent, outcome, stated reason.
+2. A borderline action triggers **k-nearest precedent lookup** (cosine similarity over stored vectors).
+3. The system returns a decision **and** a concrete explanation built from real prior rulings.
+
+**Why this is different:** Explainability becomes specific and auditable. The "your thresholds are arbitrary" criticism disappears — the justification is a prior human decision, not a hyperparameter.
+
+---
+
+### 3. Trust Economy — systemic risk, not isolated trust scores
+
+**The shift:** Trust is not a per-agent number in a silo. It is a **shared, finite risk pool** the whole fleet draws from — like capital reserves in banking.
+
+| Individual trust score | Trust Economy |
+| :--- | :--- |
+| Rogue agent quarantines itself | Rogue agent **tightens the collective budget** |
+| Other agents unaffected | Similar agents (shared model, prompt, tools) see **autonomy contract** proportionally |
+| "Did agent #47 act weird?" | "Is the **fleet** exposed to correlated failure?" |
+
+**Demo moment for judges:** One misbehaving simulated agent visibly drags down the autonomy ceiling of two "innocent" agents on the dashboard — contagion made visible.
+
+---
+
+## How a Decision Flows
+
+```mermaid
+flowchart LR
+    A[AI Agent Request] --> B[Go Gateway<br/>Checkpoint]
+    B --> C{Redis Fast State}
+    C -->|Visa OK + budget available| D[ALLOW / forward]
+    C -->|Over budget or bad visa| E[QUARANTINE / DENY]
+    B --> F[Redpanda Event Stream]
+    F --> G[Python Workers]
+    G --> H[(PostgreSQL<br/>Hash chain + precedents)]
+    G --> I[Trust pool recalc]
+    I --> C
+    H --> J[Case Law lookup<br/>for borderline actions]
+    J --> B
+```
+
+**Hot path (< 1 ms):** Gateway reads Redis — passport visa + trust pool headroom.  
+**Cold path (async):** Python workers hash-chain events, update precedent vectors, recalculate fleet risk.
+
+---
+
+## Architecture
+
+| Layer | Technology | Role |
 | :--- | :--- | :--- |
-| **Edge Gateway** | Go (Golang) | Sub-millisecond Passport evaluation |
-| **Asynchronous Bus** | Redpanda (Kafka) | Zero data-loss event streaming |
-| **Worker Engine** | Python (`hashlib`, `numpy`) | Cryptography & Precedent Vector Search |
-| **Fast State** | Redis | Trust Economy Pool caching |
-| **Immutable Ledger** | PostgreSQL (`pgvector`) | Hash-Chained Passport memory |
-| **Control Plane** | React (Vite) | KYA Dashboard & Fleet Kill Switch |
+| **Checkpoint** | Go API Gateway | Sub-ms passport + trust pool enforcement at the edge |
+| **Event bus** | Redpanda (Kafka) | Zero-loss audit streaming |
+| **Immigration office** | Python workers | Hash-chaining, precedent vectors, trust pool math |
+| **Fast state** | Redis | Visa status, spend caps, circuit breakers |
+| **Immutable ledger** | PostgreSQL (+ pgvector) | Hash-chained passport memory + precedent store |
+| **Control plane** | React (Vite) dashboard | Fleet view, audit trail, emergency kill switch |
+| **Policy** | Casbin | Role-based action permissions |
+
+```text
+┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+│  AI Agents  │────▶│  Go Gateway  │────▶│  Banking APIs   │
+└─────────────┘     └──────┬───────┘     └─────────────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+          ┌───────┐  ┌──────────┐  ┌──────────┐
+          │ Redis │  │ Redpanda │  │  Casbin  │
+          └───┬───┘  └────┬─────┘  └──────────┘
+              │           │
+              │     ┌─────▼─────┐
+              │     │  Python   │
+              │     │  Workers  │
+              │     └─────┬─────┘
+              │           ▼
+              │     ┌─────────────┐
+              └────▶│ PostgreSQL  │
+                    │ audit + NN  │
+                    └─────────────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │  Dashboard  │
+                    └─────────────┘
+```
 
 ---
 
-## 🚀 Quick Start (Running the System)
+## Built Today / Next Up
 
-**1. Start the Infrastructure**
+| Capability | Status | Where |
+| :--- | :---: | :--- |
+| Hash-chained immutable audit log | ✅ Built | `python_workers/audit_worker.py` |
+| Postgres + Redis + Redpanda infra | ✅ Built | `docker-compose.yml` |
+| Operator dashboard (audit + kill switch) | ✅ Built | `dashboard/` |
+| Casbin RBAC policies | ✅ Scaffold | `casbin_policies/` |
+| Go gateway (checkpoint) | 🔜 Planned | architecture target |
+| Case Law k-NN + human override vectors | 🔜 Planned | pgvector + worker extension |
+| Trust Economy pool + contagion decay | 🔜 Planned | Redis + worker + dashboard viz |
+
+The **vision is fully specified** in [SENTINEL_ARCHITECTURAL_INSIGHTS.md](./SENTINEL_ARCHITECTURAL_INSIGHTS.md). The **prototype proves the immutable ledger and control plane**; Case Law and Trust Economy are the differentiated story and natural next layers on the same event stream.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose  
+- Python 3.10+  
+- Node.js 18+
+
+### 1. Start infrastructure
+
 ```bash
 docker-compose up -d
 ```
-*(Spins up Redis, Redpanda, and PostgreSQL).*
 
-**2. Start the KYA Python Worker**
+Starts **PostgreSQL**, **Redis**, and **Redpanda**.
+
+### 2. Run the audit worker
+
 ```bash
 cd python_workers
 pip install -r requirements.txt
 python audit_worker.py
 ```
 
-**3. Start the KYA Operator Dashboard**
+Consumes `sentinel-audit-events`, hash-chains each event into Postgres.
+
+### 3. Launch the operator dashboard
+
 ```bash
 cd dashboard
 npm install
 npm run dev
 ```
+
+Open the URL Vite prints (typically `http://localhost:5173`). The dashboard polls for live logs and falls back to demo data until the API gateway is connected.
+
+---
+
+## Demo Script for Judges
+
+| Step | What to show | What to say |
+| :---: | :--- | :--- |
+| 1 | Dashboard audit table with hash column | *"Every agent action is cryptographically stamped — tamper-evident governance memory."* |
+| 2 | Explain Case Law (slide or README diagram) | *"Borderline actions don't hit a magic threshold — they match prior human rulings with citations."* |
+| 3 | Explain Trust Economy contagion | *"One rogue agent doesn't just hurt itself — it tightens the shared risk pool for correlated agents."* |
+| 4 | Press **Emergency Stop** | *"Instant fleet freeze — passport visas revoked, traffic halted."* |
+
+Full slide deck: [presentation_draft.md](./presentation_draft.md)
+
+---
+
+## Project Layout
+
+```text
+sentinel/
+├── casbin_policies/          # RBAC model + policy rules
+├── dashboard/                # React operator console
+├── python_workers/           # Async audit + (future) case law / trust math
+├── docker-compose.yml        # Postgres, Redis, Redpanda
+├── presentation_draft.md     # Hackathon slide content
+└── SENTINEL_ARCHITECTURAL_INSIGHTS.md
+```
+
+---
+
+## Further Reading
+
+- **[Architectural Insights](./SENTINEL_ARCHITECTURAL_INSIGHTS.md)** — deep dive on Case Law, Trust Economy, and polyglot design  
+- **[Presentation Draft](./presentation_draft.md)** — judge-ready slides with speaker notes  
+
+---
+
+<p align="center">
+  <strong>SENTINEL</strong> — Identity · Precedent · Systemic Trust<br/>
+  <em>Governance Layer for Financial Agents</em>
+</p>
