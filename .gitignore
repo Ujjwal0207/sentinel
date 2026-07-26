@@ -1,0 +1,28 @@
+# SENTINEL Project Specific Ignores
+TEAM_ALIGNMENT_FAQ.md
+presentation_draft.md
+SENTINEL_ARCHITECTURAL_INSIGHTS.md
+
+# Python ignores
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment files
+.env
+.env.local
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+.docker/
