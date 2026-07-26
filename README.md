@@ -1,59 +1,67 @@
-# 🛡️ SENTINEL 
-**S**ecure **E**nforcement & **N**etworked **T**rust **I**nfrastructure for **N**eutralized **E**xposure in **L**ive **T**ransactions
+# 🛡️ SENTINEL: The KYA (Know Your Agent) Identity Platform
 
 [![Theme](https://img.shields.io/badge/Theme-Governance_Layer_for_Financial_Agents-blue.svg)](#)
 [![Identity](https://img.shields.io/badge/Identity-KYA_(Know_Your_Agent)-purple.svg)](#)
+[![Architecture](https://img.shields.io/badge/Architecture-Polyglot_Microservices-purple.svg)](#)
 [![Status](https://img.shields.io/badge/Status-Active_Development-orange.svg)](#)
 
-> **"Just like banks have KYC for humans, SENTINEL introduces KYA (Know Your Agent): A cryptographic, continuously evolving Digital Passport for AI agents."**
+> **"Just like banks have KYC for humans, SENTINEL introduces KYA (Know Your Agent): A cryptographic, precedent-based Digital Passport for AI fleets."**
 
 ---
 
-## 📖 Overview
-As autonomous AI agents multiply across financial services, deploying them responsibly requires more than static API keys and rigid `ALLOW/DENY` rules. **SENTINEL** is a next-generation AI Identity System designed for enterprise finance.
+## 📖 Executive Summary
+As financial institutions deploy autonomous AI agents, the attack surface expands exponentially. Traditional API Gateways enforce static network limits, effectively giving an AI a "blank check" once authorized. 
 
-Instead of a traditional API Gateway, SENTINEL issues every AI agent a **Digital Passport**. This passport maintains a cryptographic memory of the agent's actions and continuously monitors its behaviour. If an agent acts erratically, its autonomy is dynamically suspended—ensuring compromised AI models never cause catastrophic financial damage.
+SENTINEL replaces this broken model with a fundamentally new AI Identity System. By issuing every agent a **Cryptographic Passport**, building a **Precedent-Based Governance** engine (Case Law), and treating AI risk as a systemic **Trust Economy**, SENTINEL guarantees that autonomous fleets operate safely, explainably, and predictably.
 
 ---
 
-## 🛂 The KYA System (Know Your Agent)
+## 🛂 Core Innovation 1: The KYA Digital Passport
+The fundamental flaw of current AI safety tools is that they govern *requests* in isolation. SENTINEL governs the *Identity*.
 
-### 1. The Digital Passport
-When an AI is deployed on the banking network, it is issued a digital passport. It begins with a "Visa Status" of *Full Autonomy* (Trust Score: 100).
+*   **Passport Issuance:** Every AI is issued a Digital Passport containing its role, risk budget, and Visa Status (e.g., *Full Autonomy*, *Human Quarantine*).
+*   **Cryptographic Stamps (Immutable Memory):** Every financial decision the AI makes is cryptographically "stamped" into its passport using **SHA-256 Hash-Chaining** directly in PostgreSQL. The AI develops an immutable Governance Memory that cannot be forged or wiped.
 
-### 2. Immutable Cryptographic Stamps
-Every financial decision the AI makes is mathematically "stamped" into its passport. SENTINEL utilizes **SHA-256 Hash-Chaining** (Blockchain logic built directly into PostgreSQL) to ensure an agent cannot erase or alter its Governance Memory.
+---
 
-### 3. The Border Patrol (Behavioural Immune System)
-SENTINEL continuously reads the passport. If the AI deviates from its normal baseline (e.g., a massive spike in high-value refunds), SENTINEL detects the anomaly and degrades the agent's passport Trust Score. 
+## ⚖️ Core Innovation 2: Governance Case Law (Precedents over Thresholds)
+Standard anomaly detection systems rely on arbitrary thresholds (e.g., "Block if anomaly > 80%"). This is unexplainable and fragile. SENTINEL replaces static math with **Precedent-Based Governance**.
 
-### 4. Adaptive Autonomy (Visa Revocation)
-We abandoned the binary `ALLOW/DENY` model. If an agent's trust drops below a critical threshold, its Visa is downgraded to *Quarantine*. The agent loses its autonomy and is instantly rerouted to a Human Approval desk.
+When a complex or borderline AI action occurs, SENTINEL vectorizes the payload (Amount, Time, Sequence, Agent) and performs a nearest-neighbor similarity search against the immutable passport ledger.
+*   **The Decision:** SENTINEL asks, *"The last 3 times an agent tried something similar, what did the human managers do?"*
+*   **Explainable AI:** Instead of returning "Denied: 97% Anomaly," SENTINEL returns: *"Approved: Matches Case #4821 where a human approved a similar refund for a known repeat customer."* The audit log is no longer passive; it is the active decision engine.
+
+---
+
+## 🏦 Core Innovation 3: The Trust Economy (Systemic Risk Management)
+Cybersecurity treats risk individually. Banks treat risk systemically. SENTINEL models AI autonomy as a shared **Trust Economy**.
+
+*   **The Risk Pool:** AI agents do not have isolated trust scores. They draw from a shared, finite "Risk Budget" across the entire fleet.
+*   **Contagion Response:** If one agent begins hallucinating or acting maliciously, it does not just quarantine itself. SENTINEL identifies the systemic risk and tightens the collective budget. Other agents utilizing similar models or prompts instantly experience a contraction in their autonomy, mathematically preventing correlated failures across the bank.
 
 ---
 
 ## 🏗️ High-Speed Polyglot Architecture
+To ensure the Passport system does not introduce unacceptable latency to the banking core, SENTINEL utilizes a heavily decoupled architecture:
 
-To ensure passport evaluation does not introduce latency to the banking core, SENTINEL is decoupled:
-
-1. **Go (Golang) Gateway:** Intercepts traffic and checks passport status via Redis in `<1ms`.
-2. **Python KYA Workers:** Consumes the event stream via Redpanda (Kafka) to run heavy anomaly mathematics and stamp the cryptographic ledger asynchronously.
+1. **The Checkpoint (Go Gateway):** The edge of the network is governed by a lightweight Go API Gateway. It queries Redis to check passport Visa Status and enforce the Trust Economy in `< 1ms`.
+2. **The Immigration Office (Python Workers):** The heavy mathematics—Hash-Chaining, Vector Embeddings for Case Law, and Trust Pool recalculations—are offloaded asynchronously via Redpanda (Kafka). Python workers process these in the background without slowing down the hot-path.
 
 ---
 
 ## 🛠️ Technology Stack
-| Category | Tech | Why? |
-|----------|------|------|
-| **Checkpoint Gateway** | Go (Golang) | Max concurrency, sub-millisecond edge latency |
-| **Immigration Worker** | Python | Cryptographic hashing & behavioural modeling |
-| **Event Stream** | Redpanda (Kafka) | Zero data-loss asynchronous audit routing |
-| **Passport State** | Redis | High-speed Trust Score caching |
-| **Ledger Storage** | PostgreSQL | Immutable passport history |
-| **Operator Dashboard** | React (Vite) | Real-time KYA monitoring and Kill Switch |
+| Component | Technology | Responsibility |
+| :--- | :--- | :--- |
+| **Edge Gateway** | Go (Golang) | Sub-millisecond Passport evaluation |
+| **Asynchronous Bus** | Redpanda (Kafka) | Zero data-loss event streaming |
+| **Worker Engine** | Python (`hashlib`, `numpy`) | Cryptography & Precedent Vector Search |
+| **Fast State** | Redis | Trust Economy Pool caching |
+| **Immutable Ledger** | PostgreSQL (`pgvector`) | Hash-Chained Passport memory |
+| **Control Plane** | React (Vite) | KYA Dashboard & Fleet Kill Switch |
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Running the System)
 
 **1. Start the Infrastructure**
 ```bash
