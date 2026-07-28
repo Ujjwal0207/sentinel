@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for Immutable Audit Logs
+  postgres:
+    image: postgres:15-alpine
+    container_name: sentinel_postgres
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: sentinel_audit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Redis for Dynamic Spend Caps and Circuit Breakers
+  redis:
+    image: redis:7.2-alpine
+    container_name: sentinel_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+
+  # Redpanda (Kafka-compatible) for Zero-Loss Audit Logging
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.2.3
+    container_name: sentinel_redpanda
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --reserve-memory
+      - 0M
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  redpanda_data:
