@@ -8,7 +8,12 @@ from datetime import datetime
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
 
-GATEWAY_URL = "http://localhost:8080/enforce"
+GATEWAY_URL = "http://localhost:8080/enforce"  # Default fallback
+try:
+    from config import GATEWAY_URL
+except ImportError:
+    import os
+    GATEWAY_URL = os.getenv("SENTINEL_GATEWAY_URL", "http://localhost:8080/enforce")
 
 AGENTS = ["ag_Travel_Bot", "ag_Dispute_AI", "ag_Fraud_Bot", "ag_Rogue_Sim"]
 
