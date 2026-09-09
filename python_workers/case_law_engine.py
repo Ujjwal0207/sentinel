@@ -42,7 +42,15 @@ def get_db_connection():
 # In a real production system, this would be a robust embedding model.
 # For the hackathon, we vectorize the payload into a standard format.
 # e.g., Vector = [Amount, Hour_of_day, Action_ID (0 for TRANSFER, 1 for REFUND, etc)]
-ACTION_MAP = {"TRANSFER": 0, "REFUND": 1, "LOGIN": 2, "WITHDRAW": 3}
+ACTION_MAP = {
+    "TRANSFER": 0,
+    "REFUND": 1,
+    "ISSUE_REFUND": 1,
+    "CREDIT_INCREASE": 2,
+    "LOCK_CARD": 3,
+    "LOGIN": 4,
+    "WITHDRAW": 5,
+}
 
 def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
     """Converts an action and its payload into a numeric vector for KNN."""
