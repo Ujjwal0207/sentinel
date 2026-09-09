@@ -24,15 +24,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Configuration (from config.py with safe fallback)
+# Database & API Configuration (from config.py with safe fallback)
 try:
-    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, API_HOST, API_PORT
 except ImportError:
     import os
     DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
     DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
     DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
     DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
+    API_HOST = os.getenv("SENTINEL_API_HOST", "0.0.0.0")
+    API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 
 def get_db_connection():
     return psycopg2.connect(
@@ -58,7 +60,8 @@ ACTION_MAP = {
 
 def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
     """Converts an action and its payload into a numeric vector for KNN."""
-    action_val = ACTION_MAP.get(action.upper(), -1)
+    action_str = str(action).upper() if action else ""
+    action_val = ACTION_MAP.get(action_str, -1)
     
     # Safe amount extraction: handles None, numeric, and string currency ($50.00)
     raw_amount = payload.get("amount") if payload else 0
@@ -112,21 +115,23 @@ def apply_contagion(rogue_agent: str, rogue_vector: np.ndarray):
         if agent == rogue_agent or len(history) == 0:
             continue
             
-        # Get the average behavioral vector for this agent
-        avg_vector = np.mean(history[-5:], axis=0) # last 5 actions
+        # Get the average behavioral vector for this agent (last 5 actions)
+        avg_vector = np.mean(history[-5:], axis=0)
         
-        # Calculate Euclidean Distance
-        dist = np.linalg.norm(avg_vector - rogue_vector)
-        
-        # Convert distance to similarity (0 to 1). Exponential decay.
-        # If dist is 0 (identical), similarity is 1. If dist is large, similarity approaches 0.
-        similarity = math.exp(-0.5 * dist)
+        # Calculate Cosine Similarity (scale-invariant across amounts and action types)
+        norm_a = np.linalg.norm(avg_vector)
+        norm_b = np.linalg.norm(rogue_vector)
+        if norm_a > 0.0 and norm_b > 0.0:
+            dot_product = float(np.dot(avg_vector, rogue_vector))
+            similarity = max(0.0, min(1.0, dot_product / (norm_a * norm_b)))
+        else:
+            similarity = 0.0
         
         # Apply shared penalty proportional to mathematical similarity
-        penalty = 15.0 * similarity
-        if penalty > 0.5:
-            logging.info(f"🧬 Contagion applied to {agent}: similarity={similarity:.2f}, penalty=-{penalty:.2f}%")
+        if similarity > 0.65:
+            penalty = 15.0 * similarity
             AGENT_BUDGETS[agent] = max(0.0, AGENT_BUDGETS[agent] - penalty)
+            logging.info(f"🧬 Contagion applied to {agent}: similarity={similarity:.2f}, penalty=-{penalty:.2f}%")
 
 # --- The Precedent Database ---
 # We keep a cached version of precedents in memory for sub-millisecond lookups
@@ -141,8 +146,8 @@ def load_precedents():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # We only want to learn from human-overridden decisions, or historically 'final' decisions
-        cursor.execute("SELECT id, action, payload, decision FROM audit_logs")
+        # Exclude system initialization genesis events (action != 'INIT')
+        cursor.execute("SELECT id, action, payload, decision FROM audit_logs WHERE action != 'INIT'")
         rows = cursor.fetchall()
         
         vectors = []
@@ -234,20 +239,30 @@ def evaluate_case(request: EvaluateRequest):
             "similarity_score": round(similarity_val, 4) # Convert cosine distance to similarity
         })
         
-    # 4. Make a decision based on Case Law precedent
-    final_decision = "ALLOW" if allow_count >= deny_count else "DENY"
+    # 4. Make a decision based on Case Law precedent & Trust Economy Budget
+    current_budget = AGENT_BUDGETS.get(request.agent_id, 100.0)
+    if current_budget <= 20.0:
+        # Agent has breached risk threshold / quarantined
+        final_decision = "DENY"
+        reason = f"Agent {request.agent_id} trust budget depleted ({current_budget:.1f}% <= 20.0%). Quarantined under Trust Economy."
+        logging.warning(f"🛑 {request.agent_id} BLOCKED by Trust Economy quarantine (Budget: {current_budget:.1f}%)")
+    else:
+        final_decision = "ALLOW" if allow_count >= deny_count else "DENY"
+        reason = f"Decision based on {len(citations)} closest precedents ({allow_count} ALLOW, {deny_count} DENY)."
     
-    # --- Execute Trust Economy Contagion ---
+    # --- Execute Trust Economy Contagion & Sliding Window History ---
     AGENT_HISTORY[request.agent_id].append(target_vector[0])
+    if len(AGENT_HISTORY[request.agent_id]) > 20:
+        AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
     
     if final_decision == "DENY":
-        logging.warning(f"🚨 {request.agent_id} DENIED by Case Law. Triggering Contagion Engine...")
+        logging.warning(f"🚨 {request.agent_id} DENIED. Triggering Contagion Engine...")
         apply_contagion(request.agent_id, target_vector[0])
     
     return {
         "status": "SUCCESS",
         "decision": final_decision,
-        "reason": f"Decision based on {len(citations)} closest precedents ({allow_count} ALLOW, {deny_count} DENY).",
+        "reason": reason,
         "citations": citations
     }
 
@@ -322,5 +337,5 @@ def get_logs():
 
 if __name__ == "__main__":
     import uvicorn
-    # Run the API on port 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Run the API using centralized configuration
+    uvicorn.run(app, host=API_HOST, port=API_PORT)
