@@ -48,14 +48,21 @@ try:
         
         try:
             response = requests.post(GATEWAY_URL, json=request_data, timeout=2)
-            if response.status_code == 200:
-                decision = response.json().get("status", "UNKNOWN")
+            amt_str = f"${amount:,.2f}" if amount > 0 else "N/A"
+            reset = "\033[0m"
+            
+            if response.status_code in (200, 403):
+                try:
+                    resp_json = response.json()
+                    decision = resp_json.get("status", "DENY")
+                except Exception:
+                    decision = "DENY" if response.status_code == 403 else "UNKNOWN"
+                    
                 color = "\033[92m" if decision == "ALLOW" else "\033[91m"
-                reset = "\033[0m"
-                amt_str = f"${amount:,.2f}" if amount > 0 else "N/A"
-                logging.info(f"[{agent_id}] requested {action} ({amt_str}) -> {color}{decision}{reset}")
+                tag = f"{decision} (RBAC Block)" if response.status_code == 403 else decision
+                logging.info(f"[{agent_id}] requested {action} ({amt_str}) -> {color}{tag}{reset}")
             else:
-                logging.warning(f"Gateway returned {response.status_code}: {response.text}")
+                logging.warning(f"Gateway returned unexpected HTTP {response.status_code}: {response.text}")
         except requests.exceptions.ConnectionError:
             logging.error(f"Failed to connect to {GATEWAY_URL}. Is the Go Gateway running?")
             
