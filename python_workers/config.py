@@ -12,6 +12,8 @@ REDIS_PORT = int(os.getenv("SENTINEL_REDIS_PORT", "6379"))
 KAFKA_BOOTSTRAP = os.getenv("SENTINEL_KAFKA_BOOTSTRAP", "localhost:9092")
 KAFKA_TOPIC = os.getenv("SENTINEL_KAFKA_TOPIC", "sentinel-audit-events")
 
+GATEWAY_URL = os.getenv("SENTINEL_GATEWAY_URL", "http://localhost:8080/enforce")
+
 API_HOST = os.getenv("SENTINEL_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 
