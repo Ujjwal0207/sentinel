@@ -34,3 +34,8 @@ venv.bak/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Go binaries and builds
+gateway/gateway_bin
+*.exe
+*.bin
