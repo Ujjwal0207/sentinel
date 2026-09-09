@@ -33,42 +33,56 @@ def get_db_connection():
 
 def setup_database():
     """Ensure the audit_logs table exists."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id SERIAL PRIMARY KEY,
-            timestamp TIMESTAMP NOT NULL,
-            agent_id VARCHAR(255) NOT NULL,
-            action VARCHAR(255) NOT NULL,
-            payload JSONB NOT NULL,
-            decision VARCHAR(50) NOT NULL,
-            previous_hash VARCHAR(64) NOT NULL,
-            current_hash VARCHAR(64) NOT NULL
-        )
-    """)
-    # Insert a genesis block if table is completely empty
-    cursor.execute("SELECT COUNT(*) FROM audit_logs")
-    if cursor.fetchone()[0] == 0:
-        genesis_hash = hashlib.sha256(b"SENTINEL_GENESIS_BLOCK").hexdigest()
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (datetime.now(), "SYSTEM", "INIT", json.dumps({}), "ALLOW", "0"*64, genesis_hash))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    logging.info("Database setup complete.")
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP NOT NULL,
+                agent_id VARCHAR(255) NOT NULL,
+                action VARCHAR(255) NOT NULL,
+                payload JSONB NOT NULL,
+                decision VARCHAR(50) NOT NULL,
+                previous_hash VARCHAR(64) NOT NULL,
+                current_hash VARCHAR(64) NOT NULL
+            )
+        """)
+        # Insert a genesis block if table is completely empty
+        cursor.execute("SELECT COUNT(*) FROM audit_logs")
+        if cursor.fetchone()[0] == 0:
+            genesis_hash = hashlib.sha256(b"SENTINEL_GENESIS_BLOCK").hexdigest()
+            cursor.execute("""
+                INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (datetime.now(), "SYSTEM", "INIT", json.dumps({}), "ALLOW", "0"*64, genesis_hash))
+        conn.commit()
+        cursor.close()
+        logging.info("Database setup complete.")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def get_latest_hash():
     """Fetch the hash of the most recent audit log to link the chain."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
-    result = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return result[0] if result else ("0" * 64)
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
+        result = cursor.fetchone()
+        cursor.close()
+        return result[0] if result else ("0" * 64)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def parse_origin_timestamp(event_data: dict) -> datetime:
     """
@@ -95,15 +109,22 @@ def parse_origin_timestamp(event_data: dict) -> datetime:
 
 def insert_audit_log(timestamp_val, agent_id, action, payload, decision, prev_hash, curr_hash):
     """Save the cryptographically secured log to PostgreSQL."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (timestamp_val, agent_id, action, json.dumps(payload), decision, prev_hash, curr_hash))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (timestamp_val, agent_id, action, json.dumps(payload), decision, prev_hash, curr_hash))
+        conn.commit()
+        cursor.close()
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 def consume_audit_logs():
     """
@@ -116,7 +137,8 @@ def consume_audit_logs():
     conf = {
         'bootstrap.servers': KAFKA_BOOTSTRAP,
         'group.id': 'python_audit_worker',
-        'auto.offset.reset': 'earliest'
+        'auto.offset.reset': 'earliest',
+        'enable.auto.commit': False
     }
 
     consumer = Consumer(conf)
@@ -180,12 +202,39 @@ def consume_audit_logs():
                 curr_hash = hashlib.sha256(data_to_lock.encode('utf-8')).hexdigest()
                 
                 # 5. Save to Immutable Database with origin timestamp
-                insert_audit_log(origin_ts, agent_id, action, payload, decision, prev_hash, curr_hash)
+                # Retry loop (Issue #43): transient DB errors must NOT cause
+                # silent event loss — that would break the SHA-256 hash chain.
+                DB_INSERT_MAX_RETRIES = 5
+                for attempt in range(1, DB_INSERT_MAX_RETRIES + 1):
+                    try:
+                        insert_audit_log(origin_ts, agent_id, action, payload, decision, prev_hash, curr_hash)
+                        # Zero-loss: manually commit Kafka offset only AFTER successful DB write
+                        consumer.commit(message=msg, asynchronous=False)
+                        break  # Success
+                    except Exception as db_err:
+                        if attempt < DB_INSERT_MAX_RETRIES:
+                            retry_delay = min(30, 2 ** attempt)
+                            logging.warning(
+                                f"⚠️ DB insert failed (attempt {attempt}/{DB_INSERT_MAX_RETRIES}): {db_err}. "
+                                f"Retrying in {retry_delay}s..."
+                            )
+                            time.sleep(retry_delay)
+                        else:
+                            # All retries exhausted: re-raise to prevent Kafka offset commit
+                            logging.critical(
+                                f"🔴 CRITICAL: DB insert failed after {DB_INSERT_MAX_RETRIES} attempts for "
+                                f"{agent_id}/{action}. Event NOT committed to Kafka. Hash chain preserved."
+                            )
+                            raise  # Propagates to outer except → offset NOT committed
                 
                 logging.info(f"🔒 Secured Event: {agent_id} | Action: {action} | Decision: {decision} | Hash: {curr_hash[:8]}...")
                 
+            except json.JSONDecodeError as jde:
+                logging.error(f"Failed to parse JSON payload from Kafka: {jde}. Committing malformed message offset to bypass poison pill.")
+                consumer.commit(message=msg, asynchronous=False)
             except Exception as e:
-                logging.error(f"Failed to process message: {e}")
+                logging.error(f"Fatal error processing message: {e}. Stopping consumer to protect hash chain.")
+                raise
 
     except KeyboardInterrupt:
         logging.info("Shutting down consumer...")
