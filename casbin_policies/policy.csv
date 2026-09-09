@@ -11,3 +11,4 @@ g, ag_Dispute_AI, refund_tier
 g, ag_Dispute_AI, credit_tier
 g, ag_Dispute_AI, general_tier
 g, ag_Fraud_Bot, fraud_tier
+g, ag_Rogue_Sim, refund_tier
