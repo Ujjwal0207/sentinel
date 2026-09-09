@@ -247,12 +247,12 @@ def get_logs():
         cursor = conn.cursor()
         
         # Fetch latest logs ordered by ID descending
-        cursor.execute("SELECT id, created_at, agent_id, action, payload, decision, hash FROM audit_logs ORDER BY id DESC LIMIT 15")
+        cursor.execute("SELECT id, timestamp, agent_id, action, payload, decision, current_hash FROM audit_logs ORDER BY id DESC LIMIT 15")
         rows = cursor.fetchall()
         
         logs = []
         for row in rows:
-            log_id, created_at, agent_id, action, payload, decision, hash_val = row
+            log_id, timestamp_val, agent_id, action, payload, decision, current_hash = row
             
             # Ensure payload is dict
             if isinstance(payload, str):
@@ -260,10 +260,16 @@ def get_logs():
                 
             amount = payload.get("amount", "N/A")
             if amount != "N/A":
-                amount = f"${float(amount):,.2f}"
+                try:
+                    amount = f"${float(amount):,.2f}"
+                except (ValueError, TypeError):
+                    amount = str(amount)
                 
             # Format time nicely for the dashboard
-            time_str = created_at.strftime("%I:%M:%S %p")
+            if hasattr(timestamp_val, "strftime"):
+                time_str = timestamp_val.strftime("%I:%M:%S %p")
+            else:
+                time_str = str(timestamp_val)
             
             logs.append({
                 "id": log_id,
@@ -272,7 +278,7 @@ def get_logs():
                 "action": action,
                 "amount": amount,
                 "decision": decision,
-                "hash": hash_val[:12] + "..." if hash_val else "PENDING..." # Truncate hash for UI
+                "hash": (current_hash[:12] + "...") if current_hash else "PENDING..." # Truncate hash for UI
             })
             
         cursor.close()
