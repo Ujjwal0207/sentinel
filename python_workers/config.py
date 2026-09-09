@@ -18,11 +18,16 @@ API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 FLEET_BUDGET_TOTAL = float(os.getenv("SENTINEL_FLEET_BUDGET", "100000"))
 DEFAULT_AGENT_CEILING = float(os.getenv("SENTINEL_AGENT_CEILING", "10000"))
 
+# Canonical numerical index mapping for ML vectorization
 ACTION_INDEX = {
-    "Issue_Refund": 0,
-    "Credit_Increase": 1,
-    "Lock_Card": 2,
-    "INIT": 3,
+    "TRANSFER": 0,
+    "REFUND": 1,
+    "ISSUE_REFUND": 1,
+    "CREDIT_INCREASE": 2,
+    "LOCK_CARD": 3,
+    "LOGIN": 4,
+    "WITHDRAW": 5,
+    "INIT": 6,
 }
 
 AGENT_PROFILES = {
