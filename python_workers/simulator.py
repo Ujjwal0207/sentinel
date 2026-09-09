@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', date
 
 GATEWAY_URL = "http://localhost:8080/enforce"
 
-AGENTS = ["ag_Travel_Bot", "ag_Dispute_AI", "ag_Fraud_Bot"]
+AGENTS = ["ag_Travel_Bot", "ag_Dispute_AI", "ag_Fraud_Bot", "ag_Rogue_Sim"]
 
 ACTIONS = [
     {"action": "Issue_Refund", "amount_range": (10, 500)},
