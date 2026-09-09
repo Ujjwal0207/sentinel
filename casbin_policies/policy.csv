@@ -2,6 +2,7 @@
 p, refund_tier, Issue_Refund, execute
 p, credit_tier, Credit_Increase, execute
 p, general_tier, TRANSFER, execute
+p, fraud_tier, Lock_Card, execute
 
 # Map specific agents to roles
 g, ag_Travel_Bot, refund_tier
@@ -9,4 +10,4 @@ g, ag_Travel_Bot, general_tier
 g, ag_Dispute_AI, refund_tier
 g, ag_Dispute_AI, credit_tier
 g, ag_Dispute_AI, general_tier
-# ag_Fraud_Bot is NOT assigned to any role, so its actions will be blocked by default.
+g, ag_Fraud_Bot, fraud_tier
