@@ -52,6 +52,7 @@ def ensure_audit_table():
     Prevents UndefinedTable crashes when case_law_engine.py starts
     before audit_worker.py has created the table (Issue #37).
     """
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -69,10 +70,15 @@ def ensure_audit_table():
         """)
         conn.commit()
         cursor.close()
-        conn.close()
         logging.info("✅ audit_logs table verified/created.")
     except Exception as e:
         logging.warning(f"Could not auto-initialize audit_logs table: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 # --- Feature Engineering ---
 # In a real production system, this would be a robust embedding model.
@@ -110,7 +116,11 @@ def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
         except (ValueError, TypeError, IndexError):
             hour = 12.0
             
-    vec = np.array([amount, hour, float(action_val)], dtype=np.float64)
+    # Min-max feature normalization (Issue #39): prevents amount ($10-$10,000)
+    # from dominating hour (0-24) and action (0-5) in cosine similarity.
+    # Without this, cosine similarity between ANY two transactions with positive
+    # amounts is > 0.96 regardless of action type or time of day.
+    vec = np.array([amount / 10000.0, hour / 24.0, float(action_val) / 6.0], dtype=np.float64)
     # Cosine distance safeguard: prevent zero-norm division by zero
     if np.linalg.norm(vec) == 0.0:
         vec[1] = 0.0001
@@ -213,6 +223,7 @@ knn_model = None
 def load_precedents():
     """Loads all historical transactions from PostgreSQL to build the Case Law database."""
     global PRECEDENT_VECTORS, PRECEDENT_METADATA, knn_model
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -248,9 +259,14 @@ def load_precedents():
             logging.warning("No precedents found in the database. KNN model is empty.")
             
         cursor.close()
-        conn.close()
     except Exception as e:
         logging.error(f"Failed to load precedents: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 # Load precedents on startup, ensuring table exists first
 @app.on_event("startup")
@@ -325,14 +341,17 @@ def evaluate_case(request: EvaluateRequest):
         })
         
     # 4. Make a decision based on Case Law precedent & Trust Economy Budget
+    quarantine_block = False  # Track if DENY is from existing quarantine (Issue #40)
     current_budget = AGENT_BUDGETS.get(request.agent_id, 100.0)
     if current_budget <= 20.0:
         # Agent has breached risk threshold / quarantined
+        quarantine_block = True
         final_decision = "DENY"
         reason = f"Agent {request.agent_id} trust budget depleted ({current_budget:.1f}% <= 20.0%). Quarantined under Trust Economy."
         logging.warning(f"🛑 {request.agent_id} BLOCKED by Trust Economy quarantine (Budget: {current_budget:.1f}%)")
     else:
-        final_decision = "ALLOW" if allow_count >= deny_count else "DENY"
+        # Fail-closed tie-breaker (Issue #45): split votes default to DENY
+        final_decision = "ALLOW" if allow_count > deny_count else "DENY"
         reason = f"Decision based on {len(citations)} closest precedents ({allow_count} ALLOW, {deny_count} DENY)."
     
     # --- Execute Trust Economy Contagion & Sliding Window History ---
@@ -340,8 +359,9 @@ def evaluate_case(request: EvaluateRequest):
     if len(AGENT_HISTORY[request.agent_id]) > 20:
         AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
     
-    if final_decision == "DENY":
-        logging.warning(f"🚨 {request.agent_id} DENIED. Triggering Contagion Engine...")
+    # Only trigger contagion on NEW behavioral breaches, not quarantine re-enforcement (Issue #40)
+    if final_decision == "DENY" and not quarantine_block:
+        logging.warning(f"🚨 {request.agent_id} DENIED by Case Law. Triggering Contagion Engine...")
         apply_contagion(request.agent_id, target_vector[0])
     elif final_decision == "ALLOW":
         # --- Positive Trust Replenishment (Issue #34) ---
@@ -361,15 +381,24 @@ def evaluate_case(request: EvaluateRequest):
 @app.get("/api/trust-economy")
 def get_trust_economy():
     """Returns the live, mathematically derived contagion state."""
+    # When fleet is frozen, report zero budget to prevent UI flash (Issue #41)
+    if FLEET_FROZEN:
+        return {
+            "fleet_budget": 0.0,
+            "active_agents": 0,
+            "fleet_frozen": True,
+            "budgets": {k: round(v, 2) for k, v in AGENT_BUDGETS.items()}
+        }
+    
     active_count = len(AGENT_BUDGETS)
     if active_count == 0:
-        return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": FLEET_FROZEN}
+        return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": False}
         
     fleet_budget = sum(AGENT_BUDGETS.values()) / active_count
     return {
         "fleet_budget": round(fleet_budget, 2),
         "active_agents": active_count,
-        "fleet_frozen": FLEET_FROZEN,
+        "fleet_frozen": False,
         "budgets": {k: round(v, 2) for k, v in AGENT_BUDGETS.items()}
     }
 
@@ -410,6 +439,7 @@ def refresh_precedents():
 @app.get("/api/logs")
 def get_logs():
     """Fetches the latest 15 cryptographic logs for the React dashboard."""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -450,11 +480,16 @@ def get_logs():
             })
             
         cursor.close()
-        conn.close()
         return logs
     except Exception as e:
         logging.error(f"Failed to fetch logs: {e}")
         raise HTTPException(status_code=500, detail="Database connection failed")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     import uvicorn
