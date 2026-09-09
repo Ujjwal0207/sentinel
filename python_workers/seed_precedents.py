@@ -5,17 +5,19 @@ import hashlib
 
 # Database Configuration (from config.py with safe fallback)
 try:
-    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
 except ImportError:
     import os
     DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
     DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
     DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
     DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
+    DB_PORT = int(os.getenv("SENTINEL_DB_PORT", "5432"))
 
 def get_db_connection():
     return psycopg2.connect(
         host=DB_HOST,
+        port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASS
