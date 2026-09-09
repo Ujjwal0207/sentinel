@@ -27,18 +27,32 @@ try:
         agent_id = random.choice(AGENTS)
         action_data = random.choice(ACTIONS)
         
-        action = action_data["action"]
-        
-        # Generate random amount
-        amount = 0
-        if action_data["amount_range"][1] > 0:
-            amount = round(random.uniform(action_data["amount_range"][0], action_data["amount_range"][1]), 2)
-            
-        payload = {
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "amount": amount,
-            "currency": "USD"
-        }
+        # Targeted simulation behavior for ag_Rogue_Sim
+        if agent_id == "ag_Rogue_Sim":
+            action = "Issue_Refund"
+            # 60% probability of anomalous high-dollar / odd-hour refund to trigger Case Law denial & Contagion
+            if random.random() < 0.6:
+                amount = round(random.uniform(4500, 9500), 2)
+                sim_time = "03:15:00"
+            else:
+                amount = round(random.uniform(25, 120), 2)
+                sim_time = datetime.now().strftime("%H:%M:%S")
+            payload = {
+                "time": sim_time,
+                "amount": amount,
+                "currency": "USD"
+            }
+        else:
+            action = action_data["action"]
+            # Generate random amount
+            amount = 0
+            if action_data["amount_range"][1] > 0:
+                amount = round(random.uniform(action_data["amount_range"][0], action_data["amount_range"][1]), 2)
+            payload = {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "amount": amount,
+                "currency": "USD"
+            }
         
         request_data = {
             "agent_id": agent_id,
