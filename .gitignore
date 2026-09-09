@@ -2,6 +2,10 @@
 TEAM_ALIGNMENT_FAQ.md
 presentation_draft.md
 SENTINEL_ARCHITECTURAL_INSIGHTS.md
+sentinel_bts/
+.developer_notes.md
+EXPLANATION_OF_SENTINEL.md
+PROJECT_TRACKER.md
 
 # Python ignores
 __pycache__/
@@ -26,3 +30,7 @@ venv.bak/
 
 # Docker
 .docker/
+
+# OS files
+.DS_Store
+Thumbs.db
