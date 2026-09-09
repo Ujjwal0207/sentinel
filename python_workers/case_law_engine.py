@@ -56,23 +56,41 @@ def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
     """Converts an action and its payload into a numeric vector for KNN."""
     action_val = ACTION_MAP.get(action.upper(), -1)
     
-    # Extract amount if present, default to 0
-    amount = float(payload.get("amount", 0))
+    # Safe amount extraction: handles None, numeric, and string currency ($50.00)
+    raw_amount = payload.get("amount") if payload else 0
+    try:
+        if isinstance(raw_amount, str):
+            raw_amount = raw_amount.replace("$", "").replace(",", "").strip()
+        amount = float(raw_amount) if raw_amount is not None else 0.0
+    except (ValueError, TypeError):
+        amount = 0.0
     
-    # Extract hour of day if present, default to 12 (noon)
-    # If the payload has a 'time', try to parse it, else use 12
+    # Extract hour of day if present, default to 12.0 (noon)
     hour = 12.0
-    if "time" in payload:
+    if payload and "time" in payload:
         try:
-            # simple mock extraction
-            hour = float(payload["time"].split(":")[0])
-        except:
-            pass
+            hour = float(str(payload["time"]).split(":")[0])
+        except (ValueError, TypeError, IndexError):
+            hour = 12.0
             
-    return np.array([amount, hour, action_val])
+    vec = np.array([amount, hour, float(action_val)], dtype=np.float64)
+    # Cosine distance safeguard: prevent zero-norm division by zero
+    if np.linalg.norm(vec) == 0.0:
+        vec[1] = 0.0001
+        
+    return vec
 
 # --- Advanced Trust Economy Math ---
+try:
+    from config import AGENT_PROFILES
+    INITIAL_AGENTS = list(AGENT_PROFILES.keys())
+except ImportError:
+    INITIAL_AGENTS = ["ag_Dispute_AI", "ag_Travel_Bot", "ag_Fraud_Bot", "ag_Rogue_Sim"]
+
 AGENT_BUDGETS = collections.defaultdict(lambda: 100.0)
+for agent in INITIAL_AGENTS:
+    AGENT_BUDGETS[agent] = 100.0
+
 AGENT_HISTORY = collections.defaultdict(list)
 
 def apply_contagion(rogue_agent: str, rogue_vector: np.ndarray):
@@ -203,11 +221,13 @@ def evaluate_case(request: EvaluateRequest):
         else:
             deny_count += 1
             
+        dist_val = float(dist) if not math.isnan(float(dist)) else 1.0
+        similarity_val = max(0.0, min(1.0, 1.0 - dist_val))
         citations.append({
             "audit_log_id": meta["log_id"],
             "historical_action": meta["action"],
             "historical_decision": meta["decision"],
-            "similarity_score": round(1.0 - float(dist), 4) # Convert cosine distance to similarity
+            "similarity_score": round(similarity_val, 4) # Convert cosine distance to similarity
         })
         
     # 4. Make a decision based on Case Law precedent
