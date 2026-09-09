@@ -26,23 +26,53 @@ app.add_middleware(
 
 # Database & API Configuration (from config.py with safe fallback)
 try:
-    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, API_HOST, API_PORT
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT, API_HOST, API_PORT
 except ImportError:
     import os
     DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
     DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
     DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
     DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
+    DB_PORT = int(os.getenv("SENTINEL_DB_PORT", "5432"))
     API_HOST = os.getenv("SENTINEL_API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 
 def get_db_connection():
     return psycopg2.connect(
         host=DB_HOST,
+        port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASS
     )
+
+def ensure_audit_table():
+    """
+    Auto-initialize the audit_logs table schema if it does not exist.
+    Prevents UndefinedTable crashes when case_law_engine.py starts
+    before audit_worker.py has created the table (Issue #37).
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP NOT NULL,
+                agent_id VARCHAR(255) NOT NULL,
+                action VARCHAR(255) NOT NULL,
+                payload JSONB NOT NULL,
+                decision VARCHAR(50) NOT NULL,
+                previous_hash VARCHAR(64) NOT NULL,
+                current_hash VARCHAR(64) NOT NULL
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logging.info("✅ audit_logs table verified/created.")
+    except Exception as e:
+        logging.warning(f"Could not auto-initialize audit_logs table: {e}")
 
 # --- Feature Engineering ---
 # In a real production system, this would be a robust embedding model.
@@ -93,6 +123,12 @@ try:
     INITIAL_AGENTS = list(AGENT_PROFILES.keys())
 except ImportError:
     INITIAL_AGENTS = ["ag_Dispute_AI", "ag_Travel_Bot", "ag_Fraud_Bot", "ag_Rogue_Sim"]
+    AGENT_PROFILES = {
+        "ag_Dispute_AI": {"model": "gpt-4", "prompt": "dispute_v3", "tools": "refund_api"},
+        "ag_Travel_Bot": {"model": "gpt-4", "prompt": "dispute_v3", "tools": "refund_api"},
+        "ag_Fraud_Bot": {"model": "claude-3", "prompt": "fraud_v1", "tools": "lock_api"},
+        "ag_Rogue_Sim": {"model": "gpt-4", "prompt": "dispute_v3", "tools": "refund_api"},
+    }
 
 AGENT_BUDGETS = collections.defaultdict(lambda: 100.0)
 for agent in INITIAL_AGENTS:
@@ -100,32 +136,67 @@ for agent in INITIAL_AGENTS:
 
 AGENT_HISTORY = collections.defaultdict(list)
 
+# --- Fleet Kill Switch State (Issue #35) ---
+FLEET_FROZEN = False
+
+def _profile_similarity(agent_a: str, agent_b: str) -> float:
+    """
+    Profile-based similarity fallback for agents with no behavioral history.
+    Compares model, prompt template, and tool configuration from AGENT_PROFILES.
+    Returns a similarity score between 0.0 and 1.0.
+    
+    This ensures contagion can propagate to similar-profile agents even before
+    they have transacted, fulfilling Pillar III of the architecture (Issue #33).
+    """
+    prof_a = AGENT_PROFILES.get(agent_a, {})
+    prof_b = AGENT_PROFILES.get(agent_b, {})
+    if not prof_a or not prof_b:
+        return 0.0
+    
+    score = 0.0
+    if prof_a.get("model") == prof_b.get("model"):
+        score += 0.4
+    if prof_a.get("prompt") == prof_b.get("prompt"):
+        score += 0.35
+    if prof_a.get("tools") == prof_b.get("tools"):
+        score += 0.25
+    return score
+
 def apply_contagion(rogue_agent: str, rogue_vector: np.ndarray):
     """
     Exponential Decay Contagion Algorithm:
     If one agent goes rogue, mathematically restrict the budgets of similar agents.
+    
+    Enhanced (Issue #33): Iterates ALL fleet agents (not just those with history).
+    Falls back to profile-based similarity when behavioral history is empty.
     """
     global AGENT_BUDGETS, AGENT_HISTORY
     
     # Base penalty for the rogue agent is severe
     AGENT_BUDGETS[rogue_agent] = max(0.0, AGENT_BUDGETS[rogue_agent] - 25.0)
     
-    # Calculate vector similarity for everyone else
-    for agent, history in AGENT_HISTORY.items():
-        if agent == rogue_agent or len(history) == 0:
+    # Calculate vector similarity for everyone in the fleet
+    all_agents = set(list(AGENT_BUDGETS.keys()) + INITIAL_AGENTS)
+    
+    for agent in all_agents:
+        if agent == rogue_agent:
             continue
-            
-        # Get the average behavioral vector for this agent (last 5 actions)
-        avg_vector = np.mean(history[-5:], axis=0)
         
-        # Calculate Cosine Similarity (scale-invariant across amounts and action types)
-        norm_a = np.linalg.norm(avg_vector)
-        norm_b = np.linalg.norm(rogue_vector)
-        if norm_a > 0.0 and norm_b > 0.0:
-            dot_product = float(np.dot(avg_vector, rogue_vector))
-            similarity = max(0.0, min(1.0, dot_product / (norm_a * norm_b)))
+        history = AGENT_HISTORY.get(agent, [])
+        
+        if len(history) > 0:
+            # Behavioral similarity: cosine similarity on last 5 action vectors
+            avg_vector = np.mean(history[-5:], axis=0)
+            norm_a = np.linalg.norm(avg_vector)
+            norm_b = np.linalg.norm(rogue_vector)
+            if norm_a > 0.0 and norm_b > 0.0:
+                dot_product = float(np.dot(avg_vector, rogue_vector))
+                similarity = max(0.0, min(1.0, dot_product / (norm_a * norm_b)))
+            else:
+                similarity = 0.0
         else:
-            similarity = 0.0
+            # Profile-based fallback: compare model, prompt, tools
+            similarity = _profile_similarity(agent, rogue_agent)
         
         # Apply shared penalty proportional to mathematical similarity
         if similarity > 0.65:
@@ -181,9 +252,10 @@ def load_precedents():
     except Exception as e:
         logging.error(f"Failed to load precedents: {e}")
 
-# Load precedents on startup
+# Load precedents on startup, ensuring table exists first
 @app.on_event("startup")
 def startup_event():
+    ensure_audit_table()
     load_precedents()
 
 # --- API Models ---
@@ -197,7 +269,20 @@ def evaluate_case(request: EvaluateRequest):
     """
     Evaluates a new transaction against historical case law using KNN.
     Returns the nearest precedents and an inferred decision.
+    
+    Hard-denies all transactions when FLEET_FROZEN is active (Issue #35).
     """
+    global FLEET_FROZEN
+    
+    # --- Circuit Breaker: Kill Switch enforcement ---
+    if FLEET_FROZEN:
+        return {
+            "status": "FROZEN",
+            "decision": "DENY",
+            "reason": "🛑 FLEET KILL SWITCH ACTIVE: All agent actions are hard-denied by the operator circuit breaker.",
+            "citations": []
+        }
+    
     if knn_model is None or len(PRECEDENT_VECTORS) == 0:
         # Fallback if no history exists yet
         return {
@@ -258,6 +343,13 @@ def evaluate_case(request: EvaluateRequest):
     if final_decision == "DENY":
         logging.warning(f"🚨 {request.agent_id} DENIED. Triggering Contagion Engine...")
         apply_contagion(request.agent_id, target_vector[0])
+    elif final_decision == "ALLOW":
+        # --- Positive Trust Replenishment (Issue #34) ---
+        # Reward clean behavior: +1.5% per approved action, capped at 100.0%
+        old_budget = AGENT_BUDGETS[request.agent_id]
+        AGENT_BUDGETS[request.agent_id] = min(100.0, old_budget + 1.5)
+        if old_budget < 100.0:
+            logging.info(f"💚 Trust replenished for {request.agent_id}: {old_budget:.1f}% → {AGENT_BUDGETS[request.agent_id]:.1f}%")
     
     return {
         "status": "SUCCESS",
@@ -271,13 +363,42 @@ def get_trust_economy():
     """Returns the live, mathematically derived contagion state."""
     active_count = len(AGENT_BUDGETS)
     if active_count == 0:
-        return {"fleet_budget": 100.0, "active_agents": 0}
+        return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": FLEET_FROZEN}
         
     fleet_budget = sum(AGENT_BUDGETS.values()) / active_count
     return {
         "fleet_budget": round(fleet_budget, 2),
         "active_agents": active_count,
+        "fleet_frozen": FLEET_FROZEN,
         "budgets": {k: round(v, 2) for k, v in AGENT_BUDGETS.items()}
+    }
+
+# --- Kill Switch Endpoints (Issue #35) ---
+@app.post("/api/kill-switch")
+def activate_kill_switch():
+    """
+    Backend circuit breaker: freezes the entire fleet.
+    All subsequent /evaluate calls will be hard-denied until resumed.
+    """
+    global FLEET_FROZEN
+    FLEET_FROZEN = True
+    logging.critical("🛑 FLEET KILL SWITCH ACTIVATED by operator. All agent actions HARD-DENIED.")
+    return {
+        "status": "FROZEN",
+        "message": "Fleet kill switch activated. All agent transactions are now DENIED."
+    }
+
+@app.post("/api/resume-fleet")
+def resume_fleet():
+    """
+    Resumes fleet operations after a kill switch activation.
+    """
+    global FLEET_FROZEN
+    FLEET_FROZEN = False
+    logging.info("✅ Fleet operations RESUMED by operator.")
+    return {
+        "status": "ACTIVE",
+        "message": "Fleet resumed. Agent transactions will be evaluated normally."
     }
 
 @app.post("/refresh")
