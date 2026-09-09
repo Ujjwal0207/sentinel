@@ -24,11 +24,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Configuration (Matches docker-compose.yml)
-DB_HOST = "localhost"
-DB_NAME = "sentinel_audit"
-DB_USER = "sentinel"
-DB_PASS = "password123"
+# Database Configuration (from config.py with safe fallback)
+try:
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
+except ImportError:
+    import os
+    DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
+    DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
+    DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
+    DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
 
 def get_db_connection():
     return psycopg2.connect(
