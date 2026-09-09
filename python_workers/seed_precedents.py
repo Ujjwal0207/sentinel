@@ -3,11 +3,15 @@ from datetime import datetime
 import json
 import hashlib
 
-# Database Configuration
-DB_HOST = "localhost"
-DB_NAME = "sentinel_audit"
-DB_USER = "sentinel"
-DB_PASS = "password123"
+# Database Configuration (from config.py with safe fallback)
+try:
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS
+except ImportError:
+    import os
+    DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
+    DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
+    DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
+    DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
 
 def get_db_connection():
     return psycopg2.connect(
@@ -61,7 +65,11 @@ def seed_database():
         ("Agent_C", "REFUND", {"amount": 450, "time": "23:00"}, "DENY"),
     ]
     
-    prev_hash = "0" * 64
+    # Fetch the latest block hash so seeded precedents link cleanly to Genesis
+    cursor.execute("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
+    last_block = cursor.fetchone()
+    prev_hash = last_block[0] if last_block else ("0" * 64)
+    
     for agent_id, action, payload, decision in precedents:
         data_to_lock = f"{prev_hash}{agent_id}{action}{decision}{json.dumps(payload, sort_keys=True)}"
         curr_hash = hashlib.sha256(data_to_lock.encode('utf-8')).hexdigest()
