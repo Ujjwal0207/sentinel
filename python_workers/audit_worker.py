@@ -8,11 +8,17 @@ from datetime import datetime
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Database Configuration (Matches docker-compose.yml)
-DB_HOST = "localhost"
-DB_NAME = "sentinel_audit"
-DB_USER = "sentinel"
-DB_PASS = "password123"
+# Database & Broker Configuration (from config.py with safe fallback)
+try:
+    from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, KAFKA_BOOTSTRAP, KAFKA_TOPIC
+except ImportError:
+    import os
+    DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
+    DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
+    DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
+    DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
+    KAFKA_BOOTSTRAP = os.getenv("SENTINEL_KAFKA_BOOTSTRAP", "localhost:9092")
+    KAFKA_TOPIC = os.getenv("SENTINEL_KAFKA_TOPIC", "sentinel-audit-events")
 
 def get_db_connection():
     return psycopg2.connect(
@@ -79,13 +85,13 @@ def consume_audit_logs():
     and persists them to PostgreSQL.
     """
     conf = {
-        'bootstrap.servers': 'localhost:9092',
+        'bootstrap.servers': KAFKA_BOOTSTRAP,
         'group.id': 'python_audit_worker',
         'auto.offset.reset': 'earliest'
     }
 
     consumer = Consumer(conf)
-    topic = 'sentinel-audit-events'
+    topic = KAFKA_TOPIC
     
     # Initialize the database table
     try:
