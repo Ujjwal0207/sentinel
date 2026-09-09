@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Shield, ShieldAlert, Activity, Cpu, Lock, CheckCircle2, XCircle, TrendingDown } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Shield, ShieldAlert, Activity, Cpu, Lock, CheckCircle2, XCircle, TrendingDown, Play } from 'lucide-react';
 import './index.css';
+
+// Configurable API base URL (Issue #36): supports staging/production via env var
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Stunning Mock Data for the prototype
 const MOCK_DATA = [
@@ -20,11 +23,19 @@ function App() {
   const [trustBudget, setTrustBudget] = useState(100.0); // Percentage
   const [activeAgents, setActiveAgents] = useState(4);
 
+  // Dynamic Edge Latency (Issue #36): measures real API round-trip time
+  const [edgeLatency, setEdgeLatency] = useState("--");
+  const latencyRef = useRef("--");
+
   // The Real-Time Polling Logic
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/logs');
+        const start = performance.now();
+        const response = await fetch(`${API_BASE}/api/logs`);
+        const elapsed = (performance.now() - start).toFixed(1);
+        latencyRef.current = `${elapsed} ms`;
+        setEdgeLatency(`${elapsed} ms`);
         if (!response.ok) throw new Error('API not ready');
         const data = await response.json();
         setLogs(data);
@@ -34,14 +45,17 @@ function App() {
     };
 
     const fetchTrustEconomy = async () => {
-      if (!isFleetActive) return;
       try {
-        const response = await fetch('http://localhost:8000/api/trust-economy');
+        const response = await fetch(`${API_BASE}/api/trust-economy`);
         if (response.ok) {
           const data = await response.json();
           setTrustBudget(data.fleet_budget);
           if (data.active_agents > 0) {
             setActiveAgents(data.active_agents);
+          }
+          // Sync fleet frozen state from backend
+          if (data.fleet_frozen !== undefined) {
+            setIsFleetActive(!data.fleet_frozen);
           }
         }
       } catch (error) {
@@ -59,13 +73,38 @@ function App() {
     }, 2000);
     
     return () => clearInterval(interval);
-  }, [isFleetActive]);
+  }, []);
 
-  const handleKillSwitch = () => {
-    setIsFleetActive(false);
-    setTrustBudget(0);
-    setActiveAgents(0);
-    alert("CRITICAL ALERT: Sentinel Fleet Kill Switch Activated. All AI Agents Frozen.");
+  const handleKillSwitch = async () => {
+    // Wire to backend circuit breaker (Issue #35)
+    try {
+      const response = await fetch(`${API_BASE}/api/kill-switch`, { method: 'POST' });
+      if (response.ok) {
+        setIsFleetActive(false);
+        setTrustBudget(0);
+        setActiveAgents(0);
+        alert("CRITICAL ALERT: Sentinel Fleet Kill Switch Activated. All AI Agents Frozen.");
+      } else {
+        // Fallback: apply client-side freeze even if backend unreachable
+        setIsFleetActive(false);
+        alert("⚠️ Kill switch sent but backend response was not OK. Client-side freeze applied.");
+      }
+    } catch (error) {
+      // Network error fallback
+      setIsFleetActive(false);
+      alert("⚠️ Could not reach backend. Client-side freeze applied. Restart backend to sync.");
+    }
+  };
+
+  const handleResumeFleet = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/resume-fleet`, { method: 'POST' });
+      if (response.ok) {
+        setIsFleetActive(true);
+      }
+    } catch (error) {
+      console.error("Failed to resume fleet", error);
+    }
   };
 
   return (
@@ -123,7 +162,7 @@ function App() {
               
               <div className="metric-row">
                 <span className="metric-label" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}><Activity size={16} /> Edge Latency</span>
-                <span className="metric-value" style={{ fontSize: "1.5rem" }}>0.8 ms</span>
+                <span className="metric-value" style={{ fontSize: "1.5rem" }}>{edgeLatency}</span>
               </div>
 
             </div>
@@ -132,11 +171,21 @@ function App() {
           <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", border: isFleetActive ? "1px solid var(--border-color)" : "1px solid rgba(239, 68, 68, 0.4)" }}>
             <h2><Lock size={18} /> Master Override</h2>
             <div className="kill-switch-container">
-              <button className="kill-switch" onClick={handleKillSwitch}>
-                EMERGENCY STOP
-              </button>
+              {isFleetActive ? (
+                <button className="kill-switch" onClick={handleKillSwitch}>
+                  EMERGENCY STOP
+                </button>
+              ) : (
+                <button className="kill-switch" onClick={handleResumeFleet} style={{ background: "linear-gradient(135deg, #059669, #10B981)", boxShadow: "0 0 20px rgba(16, 185, 129, 0.3)" }}>
+                  <Play size={16} style={{ marginRight: "0.5rem" }} />
+                  RESUME FLEET
+                </button>
+              )}
               <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", textAlign: "center", marginTop: "1rem", lineHeight: "1.5" }}>
-                Instantly revokes Visa credentials for all agents across the network.
+                {isFleetActive 
+                  ? "Instantly revokes Visa credentials for all agents across the network."
+                  : "Re-enables fleet operations. Agents will resume normal evaluation."
+                }
               </p>
             </div>
           </div>
