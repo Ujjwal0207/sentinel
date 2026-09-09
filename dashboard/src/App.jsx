@@ -17,8 +17,8 @@ function App() {
   const [isFleetActive, setIsFleetActive] = useState(true);
   
   // Trust Economy State
-  const [trustBudget, setTrustBudget] = useState(98.5); // Percentage
-  const [activeAgents, setActiveAgents] = useState(14);
+  const [trustBudget, setTrustBudget] = useState(100.0); // Percentage
+  const [activeAgents, setActiveAgents] = useState(4);
 
   // The Real-Time Polling Logic
   useEffect(() => {
@@ -98,16 +98,16 @@ function App() {
               <div>
                 <div className="metric-row">
                   <span className="metric-label">Shared Fleet Budget</span>
-                  <span className="metric-value" style={{ color: trustBudget > 70 ? 'var(--accent-green)' : trustBudget > 40 ? '#F59E0B' : 'var(--accent-red)' }}>
-                    {trustBudget.toFixed(1)}%
+                  <span className="metric-value" style={{ color: (Number(trustBudget) || 100) > 70 ? 'var(--accent-green)' : (Number(trustBudget) || 100) > 40 ? '#F59E0B' : 'var(--accent-red)' }}>
+                    {(Number(trustBudget) || 100).toFixed(1)}%
                   </span>
                 </div>
                 <div className="progress-bar-container">
                   <div 
                     className="progress-bar" 
                     style={{ 
-                      width: `${trustBudget}%`,
-                      backgroundColor: trustBudget > 70 ? 'var(--accent-green)' : trustBudget > 40 ? '#F59E0B' : 'var(--accent-red)'
+                      width: `${Math.max(0, Math.min(100, Number(trustBudget) || 0))}%`,
+                      backgroundColor: (Number(trustBudget) || 100) > 70 ? 'var(--accent-green)' : (Number(trustBudget) || 100) > 40 ? '#F59E0B' : 'var(--accent-red)'
                     }}
                   ></div>
                 </div>
