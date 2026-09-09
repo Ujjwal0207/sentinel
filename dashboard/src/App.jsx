@@ -49,13 +49,14 @@ function App() {
         const response = await fetch(`${API_BASE}/api/trust-economy`);
         if (response.ok) {
           const data = await response.json();
-          setTrustBudget(data.fleet_budget);
-          if (data.active_agents > 0) {
-            setActiveAgents(data.active_agents);
-          }
           // Sync fleet frozen state from backend
           if (data.fleet_frozen !== undefined) {
             setIsFleetActive(!data.fleet_frozen);
+          }
+          // Guard: don't overwrite kill-switch 0% with live budget values
+          setTrustBudget(data.fleet_frozen ? 0 : data.fleet_budget);
+          if (!data.fleet_frozen && data.active_agents > 0) {
+            setActiveAgents(data.active_agents);
           }
         }
       } catch (error) {
