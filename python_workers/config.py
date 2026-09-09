@@ -4,6 +4,7 @@ DB_HOST = os.getenv("SENTINEL_DB_HOST", "localhost")
 DB_NAME = os.getenv("SENTINEL_DB_NAME", "sentinel_audit")
 DB_USER = os.getenv("SENTINEL_DB_USER", "sentinel")
 DB_PASS = os.getenv("SENTINEL_DB_PASS", "password123")
+DB_PORT = int(os.getenv("SENTINEL_DB_PORT", "5432"))
 
 REDIS_HOST = os.getenv("SENTINEL_REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("SENTINEL_REDIS_PORT", "6379"))
