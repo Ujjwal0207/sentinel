@@ -43,26 +43,36 @@ def seed_database():
     cursor.execute("SELECT COUNT(*) FROM audit_logs")
     count = cursor.fetchone()[0]
     
-    if count > 10:
+    if count >= 7:
         print(f"Database already has {count} records. Skipping seed.")
         return
+
+    # If ledger is completely empty, initialize Genesis Block first
+    if count == 0:
+        genesis_hash = hashlib.sha256(b"SENTINEL_GENESIS_BLOCK").hexdigest()
+        cursor.execute("""
+            INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (datetime.now(), "SYSTEM", "INIT", json.dumps({}), "ALLOW", "0"*64, genesis_hash))
+        conn.commit()
+        print("🌱 Initialized Genesis Block in empty audit ledger.")
         
     print("Seeding database with historical precedents...")
     
-    # Some mock data to represent past human decisions
+    # Historical precedents aligned with canonical agent profiles and actions
     precedents = [
         # Normal transfers (Allowed)
-        ("Agent_A", "TRANSFER", {"amount": 50, "time": "14:00"}, "ALLOW"),
-        ("Agent_B", "TRANSFER", {"amount": 100, "time": "10:30"}, "ALLOW"),
-        ("Agent_A", "TRANSFER", {"amount": 500, "time": "11:15"}, "ALLOW"),
+        ("ag_Travel_Bot", "TRANSFER", {"amount": 50, "time": "14:00"}, "ALLOW"),
+        ("ag_Dispute_AI", "TRANSFER", {"amount": 100, "time": "10:30"}, "ALLOW"),
+        ("ag_Travel_Bot", "TRANSFER", {"amount": 500, "time": "11:15"}, "ALLOW"),
         
         # Suspicious transfers (Denied by humans)
-        ("Agent_C", "TRANSFER", {"amount": 9500, "time": "03:00"}, "DENY"), # High amount, weird hour
-        ("Agent_A", "TRANSFER", {"amount": 12000, "time": "02:45"}, "DENY"),
+        ("ag_Fraud_Bot", "TRANSFER", {"amount": 9500, "time": "03:00"}, "DENY"), # High amount, weird hour
+        ("ag_Travel_Bot", "TRANSFER", {"amount": 12000, "time": "02:45"}, "DENY"),
         
         # Refunds
-        ("Agent_B", "REFUND", {"amount": 25, "time": "15:00"}, "ALLOW"),
-        ("Agent_C", "REFUND", {"amount": 450, "time": "23:00"}, "DENY"),
+        ("ag_Dispute_AI", "REFUND", {"amount": 25, "time": "15:00"}, "ALLOW"),
+        ("ag_Fraud_Bot", "REFUND", {"amount": 450, "time": "23:00"}, "DENY"),
     ]
     
     # Fetch the latest block hash so seeded precedents link cleanly to Genesis
