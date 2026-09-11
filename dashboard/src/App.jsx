@@ -55,7 +55,9 @@ function App() {
           }
           // Guard: don't overwrite kill-switch 0% with live budget values
           setTrustBudget(data.fleet_frozen ? 0 : data.fleet_budget);
-          if (!data.fleet_frozen && data.active_agents > 0) {
+          if (data.fleet_frozen) {
+            setActiveAgents(0);
+          } else if (data.active_agents !== undefined) {
             setActiveAgents(data.active_agents);
           }
         }
@@ -88,11 +90,15 @@ function App() {
       } else {
         // Fallback: apply client-side freeze even if backend unreachable
         setIsFleetActive(false);
+        setTrustBudget(0);
+        setActiveAgents(0);
         alert("⚠️ Kill switch sent but backend response was not OK. Client-side freeze applied.");
       }
     } catch (error) {
       // Network error fallback
       setIsFleetActive(false);
+      setTrustBudget(0);
+      setActiveAgents(0);
       alert("⚠️ Could not reach backend. Client-side freeze applied. Restart backend to sync.");
     }
   };
@@ -102,11 +108,32 @@ function App() {
       const response = await fetch(`${API_BASE}/api/resume-fleet`, { method: 'POST' });
       if (response.ok) {
         setIsFleetActive(true);
+        // Immediately fetch live state after resume
+        const ecoResp = await fetch(`${API_BASE}/api/trust-economy`);
+        if (ecoResp.ok) {
+          const data = await ecoResp.json();
+          setTrustBudget(data.fleet_budget);
+          if (data.active_agents !== undefined) {
+            setActiveAgents(data.active_agents);
+          }
+        }
       }
     } catch (error) {
       console.error("Failed to resume fleet", error);
     }
   };
+
+  // Robust Trust Budget calculation (Issue #46): handles 0%, null, undefined, out-of-bounds
+  // Prevents (0 || 100) falsy bug where 0% budget erroneously rendered as 100.0% in green.
+  const numericBudget = (trustBudget !== null && trustBudget !== undefined && !isNaN(Number(trustBudget)))
+    ? Math.max(0, Math.min(100, Number(trustBudget)))
+    : 100.0;
+
+  const budgetColor = numericBudget > 70 
+    ? 'var(--accent-green)' 
+    : numericBudget > 40 
+      ? '#F59E0B' 
+      : 'var(--accent-red)';
 
   return (
     <div className="dashboard-container">
@@ -138,16 +165,16 @@ function App() {
               <div>
                 <div className="metric-row">
                   <span className="metric-label">Shared Fleet Budget</span>
-                  <span className="metric-value" style={{ color: (Number(trustBudget) || 100) > 70 ? 'var(--accent-green)' : (Number(trustBudget) || 100) > 40 ? '#F59E0B' : 'var(--accent-red)' }}>
-                    {(Number(trustBudget) || 100).toFixed(1)}%
+                  <span className="metric-value" style={{ color: budgetColor }}>
+                    {numericBudget.toFixed(1)}%
                   </span>
                 </div>
                 <div className="progress-bar-container">
                   <div 
                     className="progress-bar" 
                     style={{ 
-                      width: `${Math.max(0, Math.min(100, Number(trustBudget) || 0))}%`,
-                      backgroundColor: (Number(trustBudget) || 100) > 70 ? 'var(--accent-green)' : (Number(trustBudget) || 100) > 40 ? '#F59E0B' : 'var(--accent-red)'
+                      width: `${numericBudget}%`,
+                      backgroundColor: budgetColor
                     }}
                   ></div>
                 </div>

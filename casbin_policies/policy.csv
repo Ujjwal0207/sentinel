@@ -1,5 +1,6 @@
 # Define roles and their permitted actions
 p, refund_tier, Issue_Refund, execute
+p, refund_tier, REFUND, execute
 p, credit_tier, Credit_Increase, execute
 p, general_tier, TRANSFER, execute
 p, fraud_tier, Lock_Card, execute
