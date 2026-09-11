@@ -99,12 +99,17 @@ def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
     action_str = str(action).upper() if action else ""
     action_val = ACTION_MAP.get(action_str, -1)
     
+    # Safe payload sanitization: handle None, strings, lists, or non-dict payloads
+    if not isinstance(payload, dict):
+        payload = {}
+        
     # Safe amount extraction: handles None, numeric, and string currency ($50.00)
-    raw_amount = payload.get("amount") if payload else 0
+    raw_amount = payload.get("amount")
     try:
         if isinstance(raw_amount, str):
             raw_amount = raw_amount.replace("$", "").replace(",", "").strip()
         amount = float(raw_amount) if raw_amount is not None else 0.0
+        amount = max(0.0, amount)
     except (ValueError, TypeError):
         amount = 0.0
     
@@ -112,7 +117,9 @@ def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
     hour = 12.0
     if payload and "time" in payload:
         try:
-            hour = float(str(payload["time"]).split(":")[0])
+            parsed_hour = float(str(payload["time"]).split(":")[0])
+            if 0.0 <= parsed_hour <= 24.0:
+                hour = parsed_hour
         except (ValueError, TypeError, IndexError):
             hour = 12.0
             
@@ -237,9 +244,16 @@ def load_precedents():
         
         for row in rows:
             log_id, action, payload, decision = row
-            # payload is JSONB, psycopg2 automatically converts it to dict
-            if isinstance(payload, str):
-                payload = json.loads(payload)
+            # Robust payload parsing (Issue #49): handles None, JSON string, dict, or malformed payloads
+            if not payload:
+                payload = {}
+            elif isinstance(payload, str):
+                try:
+                    payload = json.loads(payload) if payload.strip() else {}
+                except Exception:
+                    payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
                 
             vec = vectorize_transaction(action, payload)
             vectors.append(vec)
@@ -287,10 +301,11 @@ def evaluate_case(request: EvaluateRequest):
     Returns the nearest precedents and an inferred decision.
     
     Hard-denies all transactions when FLEET_FROZEN is active (Issue #35).
+    Strictly enforces Trust Economy quarantine BEFORE precedent fallback (Issue #47).
     """
     global FLEET_FROZEN
     
-    # --- Circuit Breaker: Kill Switch enforcement ---
+    # 1. Circuit Breaker: Kill Switch enforcement (Highest Priority)
     if FLEET_FROZEN:
         return {
             "status": "FROZEN",
@@ -299,23 +314,46 @@ def evaluate_case(request: EvaluateRequest):
             "citations": []
         }
     
+    # 2. Vectorize the incoming request for history & evaluation
+    target_vector = vectorize_transaction(request.action, request.payload).reshape(1, -1)
+    
+    # 3. Trust Economy Quarantine Check (Prioritized over Model Fallback - Issue #47)
+    # Prevents cold-start / uninitialized model fallback from bypassing quarantine on rogue agents.
+    current_budget = AGENT_BUDGETS.get(request.agent_id, 100.0)
+    if current_budget <= 20.0:
+        AGENT_HISTORY[request.agent_id].append(target_vector[0])
+        if len(AGENT_HISTORY[request.agent_id]) > 20:
+            AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
+        logging.warning(f"🛑 {request.agent_id} BLOCKED by Trust Economy quarantine (Budget: {current_budget:.1f}%)")
+        return {
+            "status": "QUARANTINED",
+            "decision": "DENY",
+            "reason": f"Agent {request.agent_id} trust budget depleted ({current_budget:.1f}% <= 20.0%). Quarantined under Trust Economy.",
+            "citations": []
+        }
+
+    # 4. Precedent Model Availability & Lazy Bootstrap
+    # If the model is not fitted yet, attempt a reload before falling back
     if knn_model is None or len(PRECEDENT_VECTORS) == 0:
-        # Fallback if no history exists yet
+        load_precedents()
+        
+    if knn_model is None or len(PRECEDENT_VECTORS) == 0:
+        # Safe fallback only for healthy, non-quarantined agents
+        AGENT_HISTORY[request.agent_id].append(target_vector[0])
+        if len(AGENT_HISTORY[request.agent_id]) > 20:
+            AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
         return {
             "status": "FALLBACK",
             "decision": "ALLOW",
-            "reason": "No precedents exist. Defaulting to ALLOW.",
+            "reason": "No precedents exist in database. Defaulting to ALLOW for non-quarantined agent.",
             "citations": []
         }
         
-    # 1. Vectorize the incoming request
-    target_vector = vectorize_transaction(request.action, request.payload).reshape(1, -1)
-    
-    # 2. Find K-Nearest Neighbors
+    # 5. Find K-Nearest Neighbors in Case Law
     n_neighbors = min(3, len(PRECEDENT_VECTORS))
     distances, indices = knn_model.kneighbors(target_vector, n_neighbors=n_neighbors)
     
-    # 3. Compile the citations
+    # 6. Compile citations and vote tally
     citations = []
     allow_count = 0
     deny_count = 0
@@ -325,7 +363,6 @@ def evaluate_case(request: EvaluateRequest):
         dist = distances[0][i]
         meta = PRECEDENT_METADATA[idx]
         
-        # Tally the votes
         if meta["decision"].upper() == "ALLOW":
             allow_count += 1
         else:
@@ -337,35 +374,23 @@ def evaluate_case(request: EvaluateRequest):
             "audit_log_id": meta["log_id"],
             "historical_action": meta["action"],
             "historical_decision": meta["decision"],
-            "similarity_score": round(similarity_val, 4) # Convert cosine distance to similarity
+            "similarity_score": round(similarity_val, 4)
         })
         
-    # 4. Make a decision based on Case Law precedent & Trust Economy Budget
-    quarantine_block = False  # Track if DENY is from existing quarantine (Issue #40)
-    current_budget = AGENT_BUDGETS.get(request.agent_id, 100.0)
-    if current_budget <= 20.0:
-        # Agent has breached risk threshold / quarantined
-        quarantine_block = True
-        final_decision = "DENY"
-        reason = f"Agent {request.agent_id} trust budget depleted ({current_budget:.1f}% <= 20.0%). Quarantined under Trust Economy."
-        logging.warning(f"🛑 {request.agent_id} BLOCKED by Trust Economy quarantine (Budget: {current_budget:.1f}%)")
-    else:
-        # Fail-closed tie-breaker (Issue #45): split votes default to DENY
-        final_decision = "ALLOW" if allow_count > deny_count else "DENY"
-        reason = f"Decision based on {len(citations)} closest precedents ({allow_count} ALLOW, {deny_count} DENY)."
+    # 7. Fail-closed tie-breaker (Issue #45): split votes default to DENY
+    final_decision = "ALLOW" if allow_count > deny_count else "DENY"
+    reason = f"Decision based on {len(citations)} closest precedents ({allow_count} ALLOW, {deny_count} DENY)."
     
-    # --- Execute Trust Economy Contagion & Sliding Window History ---
+    # 8. Sliding Window History & Contagion / Replenishment
     AGENT_HISTORY[request.agent_id].append(target_vector[0])
     if len(AGENT_HISTORY[request.agent_id]) > 20:
         AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
     
-    # Only trigger contagion on NEW behavioral breaches, not quarantine re-enforcement (Issue #40)
-    if final_decision == "DENY" and not quarantine_block:
+    if final_decision == "DENY":
         logging.warning(f"🚨 {request.agent_id} DENIED by Case Law. Triggering Contagion Engine...")
         apply_contagion(request.agent_id, target_vector[0])
     elif final_decision == "ALLOW":
-        # --- Positive Trust Replenishment (Issue #34) ---
-        # Reward clean behavior: +1.5% per approved action, capped at 100.0%
+        # Positive Trust Replenishment (Issue #34): +1.5% per approved action, capped at 100.0%
         old_budget = AGENT_BUDGETS[request.agent_id]
         AGENT_BUDGETS[request.agent_id] = min(100.0, old_budget + 1.5)
         if old_budget < 100.0:
@@ -381,25 +406,27 @@ def evaluate_case(request: EvaluateRequest):
 @app.get("/api/trust-economy")
 def get_trust_economy():
     """Returns the live, mathematically derived contagion state."""
-    # When fleet is frozen, report zero budget to prevent UI flash (Issue #41)
+    # When fleet is frozen, report zero budget and zero active agents (Issue #41)
     if FLEET_FROZEN:
         return {
             "fleet_budget": 0.0,
             "active_agents": 0,
             "fleet_frozen": True,
-            "budgets": {k: round(v, 2) for k, v in AGENT_BUDGETS.items()}
+            "budgets": {k: round(float(v), 2) for k, v in AGENT_BUDGETS.items()}
         }
     
-    active_count = len(AGENT_BUDGETS)
-    if active_count == 0:
-        return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": False}
+    total_registered = len(AGENT_BUDGETS)
+    if total_registered == 0:
+        return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": False, "budgets": {}}
         
-    fleet_budget = sum(AGENT_BUDGETS.values()) / active_count
+    # Active agents count (Issue #50): only agents with budget > 20.0% are active (not quarantined)
+    active_agents_count = sum(1 for b in AGENT_BUDGETS.values() if b > 20.0)
+    fleet_budget = sum(AGENT_BUDGETS.values()) / total_registered
     return {
-        "fleet_budget": round(fleet_budget, 2),
-        "active_agents": active_count,
+        "fleet_budget": round(float(fleet_budget), 2),
+        "active_agents": active_agents_count,
         "fleet_frozen": False,
-        "budgets": {k: round(v, 2) for k, v in AGENT_BUDGETS.items()}
+        "budgets": {k: round(float(v), 2) for k, v in AGENT_BUDGETS.items()}
     }
 
 # --- Kill Switch Endpoints (Issue #35) ---
@@ -452,22 +479,35 @@ def get_logs():
         for row in rows:
             log_id, timestamp_val, agent_id, action, payload, decision, current_hash = row
             
-            # Ensure payload is dict
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-                
-            amount = payload.get("amount", "N/A")
-            if amount != "N/A":
+            # Robust payload parsing (Issue #49): handles None, JSON string, dict, or malformed payloads
+            if not payload:
+                payload = {}
+            elif isinstance(payload, str):
                 try:
-                    amount = f"${float(amount):,.2f}"
+                    payload = json.loads(payload) if payload.strip() else {}
+                except Exception:
+                    payload = {}
+            elif not isinstance(payload, dict):
+                payload = {}
+                
+            raw_amount = payload.get("amount")
+            if raw_amount is None or raw_amount == "N/A" or raw_amount == "":
+                amount = "N/A"
+            else:
+                try:
+                    if isinstance(raw_amount, str):
+                        cleaned = raw_amount.replace("$", "").replace(",", "").strip()
+                        amount = f"${float(cleaned):,.2f}"
+                    else:
+                        amount = f"${float(raw_amount):,.2f}"
                 except (ValueError, TypeError):
-                    amount = str(amount)
+                    amount = str(raw_amount)
                 
             # Format time nicely for the dashboard
             if hasattr(timestamp_val, "strftime"):
                 time_str = timestamp_val.strftime("%I:%M:%S %p")
             else:
-                time_str = str(timestamp_val)
+                time_str = str(timestamp_val) if timestamp_val else "--:--:--"
             
             logs.append({
                 "id": log_id,

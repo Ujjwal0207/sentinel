@@ -17,10 +17,22 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+python_workers/__pycache__/
+python_workers/.venv/
+python_workers/venv/
 
 # Environment files
 .env
 .env.local
+**/.env
+**/.env.local
+
+# Node / frontend
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/.cache/
 
 # Editor directories and files
 .idea/
@@ -30,6 +42,7 @@ venv.bak/
 
 # Docker
 .docker/
+**/docker-data/
 
 # OS files
 .DS_Store
@@ -39,3 +52,15 @@ Thumbs.db
 gateway/gateway_bin
 *.exe
 *.bin
+
+# Logs and generated runtime data
+*.log
+*.pid
+*.sqlite3
+coverage/
+.tmp/
+*.tmp
+
+# Local data directories
+redis-data/
+postgres-data/

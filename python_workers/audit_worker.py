@@ -67,22 +67,29 @@ def setup_database():
             except Exception:
                 pass
 
-def get_latest_hash():
+def get_latest_hash(max_retries=3):
     """Fetch the hash of the most recent audit log to link the chain."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
-        result = cursor.fetchone()
-        cursor.close()
-        return result[0] if result else ("0" * 64)
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+    for attempt in range(1, max_retries + 1):
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
+            result = cursor.fetchone()
+            cursor.close()
+            return result[0] if result else ("0" * 64)
+        except Exception as e:
+            if attempt < max_retries:
+                time.sleep(1)
+            else:
+                logging.error(f"Failed to fetch latest hash after {max_retries} attempts: {e}")
+                raise
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 def parse_origin_timestamp(event_data: dict) -> datetime:
     """
@@ -144,12 +151,26 @@ def consume_audit_logs():
     consumer = Consumer(conf)
     topic = KAFKA_TOPIC
     
-    # Initialize the database table
-    try:
-        setup_database()
-    except Exception as e:
-        logging.error(f"Failed to setup database: {e}. (Is Docker running?)")
-        return
+    # Initialize the database table with exponential retry (Issue #48)
+    # Prevents fatal worker crash if PostgreSQL is still initializing in Docker/K8s
+    DB_SETUP_MAX_RETRIES = 10
+    db_connected = False
+    for attempt in range(1, DB_SETUP_MAX_RETRIES + 1):
+        try:
+            setup_database()
+            db_connected = True
+            break
+        except Exception as e:
+            if attempt < DB_SETUP_MAX_RETRIES:
+                retry_wait = min(15, 2 ** min(attempt, 4))
+                logging.warning(
+                    f"⚠️ PostgreSQL not ready yet ({e}) [attempt {attempt}/{DB_SETUP_MAX_RETRIES}]. "
+                    f"Retrying in {retry_wait}s..."
+                )
+                time.sleep(retry_wait)
+            else:
+                logging.critical(f"🔴 Failed to connect to database after {DB_SETUP_MAX_RETRIES} attempts: {e}")
+                return
 
     # Exponential backoff state for transient Kafka errors
     consecutive_errors = 0
@@ -189,7 +210,11 @@ def consume_audit_logs():
                 agent_id = event_data.get("agent_id", "UNKNOWN")
                 action = event_data.get("action", "UNKNOWN")
                 decision = event_data.get("decision", "UNKNOWN")
-                payload = event_data.get("payload", {})
+                
+                # Robust payload extraction (Issue #49): handles null, non-dict, or missing
+                payload = event_data.get("payload")
+                if not payload or not isinstance(payload, dict):
+                    payload = {}
                 
                 # 2. Parse the TRUE origin timestamp from the Gateway event
                 origin_ts = parse_origin_timestamp(event_data)

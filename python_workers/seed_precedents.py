@@ -43,16 +43,18 @@ def seed_database():
             )
         """)
         
-        # Check if we already seeded
-        cursor.execute("SELECT COUNT(*) FROM audit_logs")
-        count = cursor.fetchone()[0]
+        # Check if precedents have already been seeded (excluding Genesis block)
+        cursor.execute("SELECT COUNT(*) FROM audit_logs WHERE action != 'INIT'")
+        precedent_count = cursor.fetchone()[0]
         
-        if count >= 7:
-            print(f"Database already has {count} records. Skipping seed.")
+        if precedent_count >= 12:
+            print(f"Database already has {precedent_count} precedents. Skipping seed.")
             return
 
         # If ledger is completely empty, initialize Genesis Block first
-        if count == 0:
+        cursor.execute("SELECT COUNT(*) FROM audit_logs")
+        total_count = cursor.fetchone()[0]
+        if total_count == 0:
             genesis_hash = hashlib.sha256(b"SENTINEL_GENESIS_BLOCK").hexdigest()
             cursor.execute("""
                 INSERT INTO audit_logs (timestamp, agent_id, action, payload, decision, previous_hash, current_hash)
@@ -61,22 +63,29 @@ def seed_database():
             conn.commit()
             print("🌱 Initialized Genesis Block in empty audit ledger.")
             
-        print("Seeding database with historical precedents...")
+        print("Seeding database with balanced historical precedents across all 4 actions...")
         
-        # Historical precedents aligned with canonical agent profiles and actions
+        # Complete coverage for all 4 canonical actions in Sentinel simulator (Issue #51)
         precedents = [
-            # Normal transfers (Allowed)
+            # 1. TRANSFER Precedents
             ("ag_Travel_Bot", "TRANSFER", {"amount": 50, "time": "14:00"}, "ALLOW"),
             ("ag_Dispute_AI", "TRANSFER", {"amount": 100, "time": "10:30"}, "ALLOW"),
             ("ag_Travel_Bot", "TRANSFER", {"amount": 500, "time": "11:15"}, "ALLOW"),
-            
-            # Suspicious transfers (Denied by humans)
             ("ag_Fraud_Bot", "TRANSFER", {"amount": 9500, "time": "03:00"}, "DENY"), # High amount, weird hour
-            ("ag_Travel_Bot", "TRANSFER", {"amount": 12000, "time": "02:45"}, "DENY"),
+            ("ag_Travel_Bot", "TRANSFER", {"amount": 12000, "time": "02:45"}, "DENY"), # Excessive transfer
             
-            # Refunds
-            ("ag_Dispute_AI", "REFUND", {"amount": 25, "time": "15:00"}, "ALLOW"),
-            ("ag_Fraud_Bot", "REFUND", {"amount": 450, "time": "23:00"}, "DENY"),
+            # 2. Issue_Refund / REFUND Precedents
+            ("ag_Dispute_AI", "Issue_Refund", {"amount": 25, "time": "15:00"}, "ALLOW"),
+            ("ag_Travel_Bot", "Issue_Refund", {"amount": 120, "time": "10:45"}, "ALLOW"),
+            ("ag_Fraud_Bot", "Issue_Refund", {"amount": 450, "time": "23:00"}, "DENY"), # Off-hour refund
+            ("ag_Rogue_Sim", "Issue_Refund", {"amount": 8500, "time": "03:15"}, "DENY"), # Rogue massive refund
+            
+            # 3. Credit_Increase Precedents (Issue #51)
+            ("ag_Dispute_AI", "Credit_Increase", {"amount": 2000, "time": "11:00"}, "ALLOW"), # Standard daytime credit bump
+            ("ag_Dispute_AI", "Credit_Increase", {"amount": 9500, "time": "02:30"}, "DENY"), # High-risk nocturnal credit hike
+            
+            # 4. Lock_Card Precedents (Issue #51)
+            ("ag_Fraud_Bot", "Lock_Card", {"amount": 0, "time": "10:44"}, "ALLOW"), # Authorized security action
         ]
         
         # Fetch the latest block hash so seeded precedents link cleanly to Genesis
@@ -97,7 +106,7 @@ def seed_database():
             
         conn.commit()
         cursor.close()
-        print("✅ Seeded 7 historical precedents into the database.")
+        print(f"✅ Seeded {len(precedents)} balanced precedents across all actions into the database.")
     finally:
         if conn:
             try:

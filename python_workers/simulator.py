@@ -82,8 +82,8 @@ try:
                 logging.info(f"[{agent_id}] requested {action} ({amt_str}) -> {color}{tag}{reset}")
             else:
                 logging.warning(f"Gateway returned unexpected HTTP {response.status_code}: {response.text}")
-        except requests.exceptions.ConnectionError:
-            logging.error(f"Failed to connect to {GATEWAY_URL}. Is the Go Gateway running?")
+        except requests.exceptions.RequestException as req_err:
+            logging.error(f"Network error connecting to {GATEWAY_URL}: {req_err}")
             
         # Wait a few seconds before the next event
         time.sleep(random.uniform(2.0, 5.0))
