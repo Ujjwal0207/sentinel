@@ -1,4 +1,6 @@
 # SENTINEL Project Specific Ignores
+docs/
+docs
 business_sentinel.md
 business_sentinel
 realworld_problem.md
