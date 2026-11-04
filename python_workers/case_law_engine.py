@@ -81,9 +81,9 @@ def ensure_audit_table():
                 pass
 
 # --- Feature Engineering ---
-# In a real production system, this would be a robust embedding model.
-# For the hackathon, we vectorize the payload into a standard format.
-# e.g., Vector = [Amount, Hour_of_day, Action_ID (0 for TRANSFER, 1 for REFUND, etc)]
+# High-Dimensional Vectorization Engine (Sentinel Hardened Guardrails)
+# Vectorizes financial magnitude, temporal patterns, action categories, 
+# parameter entropy (obfuscation/injection detection), payload complexity, and action risk weight.
 ACTION_MAP = {
     "TRANSFER": 0,
     "REFUND": 1,
@@ -94,8 +94,40 @@ ACTION_MAP = {
     "WITHDRAW": 5,
 }
 
+ACTION_RISK_WEIGHTS = {
+    "TRANSFER": 0.9,
+    "CREDIT_INCREASE": 0.8,
+    "ISSUE_REFUND": 0.5,
+    "REFUND": 0.5,
+    "LOCK_CARD": 0.3,
+    "LOGIN": 0.2,
+    "WITHDRAW": 0.8,
+}
+
+def calculate_payload_entropy(payload: dict) -> float:
+    """
+    Computes Shannon entropy across all text values in the payload.
+    High entropy flags encrypted blobs, obfuscated shellcode, or SQL injections.
+    """
+    text = ""
+    for k, v in payload.items():
+        if isinstance(v, str):
+            text += v
+        elif isinstance(v, (dict, list)):
+            text += str(v)
+    if not text:
+        return 0.0
+    freq = collections.Counter(text)
+    total = len(text)
+    entropy = -sum((cnt / total) * math.log2(cnt / total) for cnt in freq.values())
+    # Normalize: max entropy for printable ASCII is ~6.55 bits
+    return min(1.0, entropy / 6.5)
+
 def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
-    """Converts an action and its payload into a numeric vector for KNN."""
+    """
+    Converts an action and its payload into a robust 6-dimensional normalized vector for k-NN:
+    [Amount_Norm, Hour_Norm, Action_Norm, Entropy, Complexity, Risk_Weight]
+    """
     action_str = str(action).upper() if action else ""
     action_val = ACTION_MAP.get(action_str, -1)
     
@@ -123,20 +155,31 @@ def vectorize_transaction(action: str, payload: dict) -> np.ndarray:
         except (ValueError, TypeError, IndexError):
             hour = 12.0
             
-    # Min-max feature normalization (Issue #39): prevents amount ($10-$10,000)
-    # from dominating hour (0-24) and action (0-5) in cosine similarity.
-    # Without this, cosine similarity between ANY two transactions with positive
-    # amounts is > 0.96 regardless of action type or time of day.
-    vec = np.array([amount / 10000.0, hour / 24.0, float(action_val) / 6.0], dtype=np.float64)
-    # Cosine distance safeguard: prevent zero-norm division by zero
-    if np.linalg.norm(vec) == 0.0:
+    # Feature 0: Log-scaled normalized amount (handles $0 to $100,000 without distortion)
+    amount_norm = min(1.0, math.log10(1.0 + amount) / 5.0)
+    # Feature 1: Normalized hour of day (0.0 - 1.0)
+    hour_norm = hour / 24.0
+    # Feature 2: Normalized Action ID (0.0 - 1.0)
+    action_norm = float(action_val) / 6.0 if action_val >= 0 else 0.0
+    # Feature 3: Shannon Entropy (obfuscation & injection detection)
+    entropy = calculate_payload_entropy(payload)
+    # Feature 4: Payload structural complexity (number of fields / 10.0)
+    complexity = min(1.0, len(payload) / 10.0)
+    # Feature 5: Action risk weight
+    risk_weight = ACTION_RISK_WEIGHTS.get(action_str, 0.4)
+    
+    vec = np.array([amount_norm, hour_norm, action_norm, entropy, complexity, risk_weight], dtype=np.float64)
+    # Cosine distance safeguard: L2 normalize to prevent zero-norm division
+    norm = np.linalg.norm(vec)
+    if norm == 0.0:
         vec[1] = 0.0001
+        norm = np.linalg.norm(vec)
         
-    return vec
+    return vec / norm
 
-# --- Advanced Trust Economy Math ---
+# --- Advanced Trust Economy Math & Distributed State ---
 try:
-    from config import AGENT_PROFILES
+    from config import AGENT_PROFILES, REDIS_HOST, REDIS_PORT
     INITIAL_AGENTS = list(AGENT_PROFILES.keys())
 except ImportError:
     INITIAL_AGENTS = ["ag_Dispute_AI", "ag_Travel_Bot", "ag_Fraud_Bot", "ag_Rogue_Sim"]
@@ -146,24 +189,77 @@ except ImportError:
         "ag_Fraud_Bot": {"model": "claude-3", "prompt": "fraud_v1", "tools": "lock_api"},
         "ag_Rogue_Sim": {"model": "gpt-4", "prompt": "dispute_v3", "tools": "refund_api"},
     }
+    REDIS_HOST = "localhost"
+    REDIS_PORT = 6379
 
+# In-Memory Fallback Structures
 AGENT_BUDGETS = collections.defaultdict(lambda: 100.0)
 for agent in INITIAL_AGENTS:
     AGENT_BUDGETS[agent] = 100.0
 
 AGENT_HISTORY = collections.defaultdict(list)
-
-# --- Fleet Kill Switch State (Issue #35) ---
 FLEET_FROZEN = False
+
+# Distributed Redis Connection for Fault-Tolerant Persistence
+redis_client = None
+try:
+    import redis
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_timeout=1.0)
+    r.ping()
+    redis_client = r
+    logging.info(f"✅ Connected to Redis ({REDIS_HOST}:{REDIS_PORT}) for persistent Trust Economy.")
+except Exception as e:
+    logging.info(f"ℹ️ Redis offline or unavailable ({e}). Operating in resilient in-memory Trust Economy mode.")
+    redis_client = None
+
+def get_agent_budget(agent_id: str) -> float:
+    """Reads agent trust budget with Redis persistence and memory fallback."""
+    if redis_client:
+        try:
+            val = redis_client.hget("sentinel:budgets", agent_id)
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            logging.warning(f"Redis get budget failed: {e}")
+    return float(AGENT_BUDGETS[agent_id])
+
+def set_agent_budget(agent_id: str, budget: float):
+    """Sets agent trust budget atomically with Redis sync."""
+    capped_budget = max(0.0, min(100.0, float(budget)))
+    AGENT_BUDGETS[agent_id] = capped_budget
+    if redis_client:
+        try:
+            redis_client.hset("sentinel:budgets", agent_id, str(capped_budget))
+        except Exception as e:
+            logging.warning(f"Redis set budget failed: {e}")
+
+def get_fleet_frozen() -> bool:
+    """Reads fleet kill-switch state with Redis persistence."""
+    global FLEET_FROZEN
+    if redis_client:
+        try:
+            val = redis_client.get("sentinel:fleet_frozen")
+            if val is not None:
+                return val.lower() == "true"
+        except Exception as e:
+            logging.warning(f"Redis get fleet_frozen failed: {e}")
+    return FLEET_FROZEN
+
+def set_fleet_frozen(frozen: bool):
+    """Sets fleet kill-switch state with Redis sync."""
+    global FLEET_FROZEN
+    FLEET_FROZEN = frozen
+    if redis_client:
+        try:
+            redis_client.set("sentinel:fleet_frozen", "true" if frozen else "false")
+        except Exception as e:
+            logging.warning(f"Redis set fleet_frozen failed: {e}")
 
 def _profile_similarity(agent_a: str, agent_b: str) -> float:
     """
     Profile-based similarity fallback for agents with no behavioral history.
     Compares model, prompt template, and tool configuration from AGENT_PROFILES.
     Returns a similarity score between 0.0 and 1.0.
-    
-    This ensures contagion can propagate to similar-profile agents even before
-    they have transacted, fulfilling Pillar III of the architecture (Issue #33).
     """
     prof_a = AGENT_PROFILES.get(agent_a, {})
     prof_b = AGENT_PROFILES.get(agent_b, {})
@@ -183,14 +279,13 @@ def apply_contagion(rogue_agent: str, rogue_vector: np.ndarray):
     """
     Exponential Decay Contagion Algorithm:
     If one agent goes rogue, mathematically restrict the budgets of similar agents.
-    
-    Enhanced (Issue #33): Iterates ALL fleet agents (not just those with history).
-    Falls back to profile-based similarity when behavioral history is empty.
+    Persists updates to Redis when available.
     """
-    global AGENT_BUDGETS, AGENT_HISTORY
+    global AGENT_HISTORY
     
-    # Base penalty for the rogue agent is severe
-    AGENT_BUDGETS[rogue_agent] = max(0.0, AGENT_BUDGETS[rogue_agent] - 25.0)
+    # Base penalty for the rogue agent is severe (-25.0%)
+    current_rogue_budget = get_agent_budget(rogue_agent)
+    set_agent_budget(rogue_agent, current_rogue_budget - 25.0)
     
     # Calculate vector similarity for everyone in the fleet
     all_agents = set(list(AGENT_BUDGETS.keys()) + INITIAL_AGENTS)
@@ -218,7 +313,8 @@ def apply_contagion(rogue_agent: str, rogue_vector: np.ndarray):
         # Apply shared penalty proportional to mathematical similarity
         if similarity > 0.65:
             penalty = 15.0 * similarity
-            AGENT_BUDGETS[agent] = max(0.0, AGENT_BUDGETS[agent] - penalty)
+            current_peer_budget = get_agent_budget(agent)
+            set_agent_budget(agent, current_peer_budget - penalty)
             logging.info(f"🧬 Contagion applied to {agent}: similarity={similarity:.2f}, penalty=-{penalty:.2f}%")
 
 # --- The Precedent Database ---
@@ -303,10 +399,8 @@ def evaluate_case(request: EvaluateRequest):
     Hard-denies all transactions when FLEET_FROZEN is active (Issue #35).
     Strictly enforces Trust Economy quarantine BEFORE precedent fallback (Issue #47).
     """
-    global FLEET_FROZEN
-    
     # 1. Circuit Breaker: Kill Switch enforcement (Highest Priority)
-    if FLEET_FROZEN:
+    if get_fleet_frozen():
         return {
             "status": "FROZEN",
             "decision": "DENY",
@@ -319,7 +413,7 @@ def evaluate_case(request: EvaluateRequest):
     
     # 3. Trust Economy Quarantine Check (Prioritized over Model Fallback - Issue #47)
     # Prevents cold-start / uninitialized model fallback from bypassing quarantine on rogue agents.
-    current_budget = AGENT_BUDGETS.get(request.agent_id, 100.0)
+    current_budget = get_agent_budget(request.agent_id)
     if current_budget <= 20.0:
         AGENT_HISTORY[request.agent_id].append(target_vector[0])
         if len(AGENT_HISTORY[request.agent_id]) > 20:
@@ -391,10 +485,11 @@ def evaluate_case(request: EvaluateRequest):
         apply_contagion(request.agent_id, target_vector[0])
     elif final_decision == "ALLOW":
         # Positive Trust Replenishment (Issue #34): +1.5% per approved action, capped at 100.0%
-        old_budget = AGENT_BUDGETS[request.agent_id]
-        AGENT_BUDGETS[request.agent_id] = min(100.0, old_budget + 1.5)
+        old_budget = get_agent_budget(request.agent_id)
+        new_budget = min(100.0, old_budget + 1.5)
+        set_agent_budget(request.agent_id, new_budget)
         if old_budget < 100.0:
-            logging.info(f"💚 Trust replenished for {request.agent_id}: {old_budget:.1f}% → {AGENT_BUDGETS[request.agent_id]:.1f}%")
+            logging.info(f"💚 Trust replenished for {request.agent_id}: {old_budget:.1f}% → {new_budget:.1f}%")
     
     return {
         "status": "SUCCESS",
@@ -406,27 +501,31 @@ def evaluate_case(request: EvaluateRequest):
 @app.get("/api/trust-economy")
 def get_trust_economy():
     """Returns the live, mathematically derived contagion state."""
+    is_frozen = get_fleet_frozen()
+    all_keys = set(list(AGENT_BUDGETS.keys()) + INITIAL_AGENTS)
+    current_budgets = {agent: round(get_agent_budget(agent), 2) for agent in all_keys}
+    
     # When fleet is frozen, report zero budget and zero active agents (Issue #41)
-    if FLEET_FROZEN:
+    if is_frozen:
         return {
             "fleet_budget": 0.0,
             "active_agents": 0,
             "fleet_frozen": True,
-            "budgets": {k: round(float(v), 2) for k, v in AGENT_BUDGETS.items()}
+            "budgets": current_budgets
         }
     
-    total_registered = len(AGENT_BUDGETS)
+    total_registered = len(current_budgets)
     if total_registered == 0:
         return {"fleet_budget": 100.0, "active_agents": 0, "fleet_frozen": False, "budgets": {}}
         
     # Active agents count (Issue #50): only agents with budget > 20.0% are active (not quarantined)
-    active_agents_count = sum(1 for b in AGENT_BUDGETS.values() if b > 20.0)
-    fleet_budget = sum(AGENT_BUDGETS.values()) / total_registered
+    active_agents_count = sum(1 for b in current_budgets.values() if b > 20.0)
+    fleet_budget = sum(current_budgets.values()) / total_registered
     return {
         "fleet_budget": round(float(fleet_budget), 2),
         "active_agents": active_agents_count,
         "fleet_frozen": False,
-        "budgets": {k: round(float(v), 2) for k, v in AGENT_BUDGETS.items()}
+        "budgets": current_budgets
     }
 
 # --- Kill Switch Endpoints (Issue #35) ---
@@ -436,8 +535,7 @@ def activate_kill_switch():
     Backend circuit breaker: freezes the entire fleet.
     All subsequent /evaluate calls will be hard-denied until resumed.
     """
-    global FLEET_FROZEN
-    FLEET_FROZEN = True
+    set_fleet_frozen(True)
     logging.critical("🛑 FLEET KILL SWITCH ACTIVATED by operator. All agent actions HARD-DENIED.")
     return {
         "status": "FROZEN",
@@ -449,8 +547,7 @@ def resume_fleet():
     """
     Resumes fleet operations after a kill switch activation.
     """
-    global FLEET_FROZEN
-    FLEET_FROZEN = False
+    set_fleet_frozen(False)
     logging.info("✅ Fleet operations RESUMED by operator.")
     return {
         "status": "ACTIVE",
@@ -530,6 +627,19 @@ def get_logs():
                 conn.close()
             except Exception:
                 pass
+
+@app.get("/api/verify-audit-chain")
+def verify_audit_chain():
+    """
+    Forensic Verification API: Cryptographically validates the entire SHA-256
+    hash chain across all stored audit records to prove non-tampering.
+    """
+    try:
+        from audit_worker import verify_chain_integrity
+        return verify_chain_integrity()
+    except Exception as e:
+        logging.error(f"Audit chain verification error: {e}")
+        return {"status": "ERROR", "error": str(e), "tampered": None}
 
 if __name__ == "__main__":
     import uvicorn
