@@ -12,6 +12,10 @@ sentinel_bts/
 .developer_notes.md
 EXPLANATION_OF_SENTINEL.md
 PROJECT_TRACKER.md
+CROSS_QUESTIONS.md
+CROSS_QUESTIONS_ANSWERS.md
+CROSS_QUESTIONS*.md
+DEEP_CODEBASE_KNOWLEDGE.md
 
 # Python ignores
 __pycache__/
