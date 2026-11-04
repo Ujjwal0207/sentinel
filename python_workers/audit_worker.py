@@ -133,6 +133,77 @@ def insert_audit_log(timestamp_val, agent_id, action, payload, decision, prev_ha
             except Exception:
                 pass
 
+def verify_chain_integrity() -> dict:
+    """
+    Forensic Auditor: Scans the entire audit_logs table from genesis to head
+    and cryptographically recomputes every SHA-256 hash to prove non-tampering.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, timestamp, agent_id, action, payload, decision, previous_hash, current_hash FROM audit_logs ORDER BY id ASC")
+        rows = cursor.fetchall()
+        cursor.close()
+
+        if not rows:
+            return {"status": "EMPTY", "verified_records": 0, "tampered": False}
+
+        expected_prev = "0" * 64
+        for idx, row in enumerate(rows):
+            log_id, ts, agent_id, action, payload, decision, prev_hash, curr_hash = row
+            if idx == 0 and action == "INIT":
+                expected_prev = curr_hash
+                continue
+
+            if prev_hash != expected_prev:
+                return {
+                    "status": "CHAIN_BROKEN",
+                    "tampered": True,
+                    "compromised_id": log_id,
+                    "expected_prev": expected_prev,
+                    "actual_prev": prev_hash
+                }
+
+            # Robust payload conversion for recomputed hash
+            if not payload:
+                parsed_payload = {}
+            elif isinstance(payload, str):
+                try:
+                    parsed_payload = json.loads(payload)
+                except Exception:
+                    parsed_payload = {}
+            else:
+                parsed_payload = payload
+
+            data_to_lock = f"{prev_hash}{agent_id}{action}{decision}{json.dumps(parsed_payload, sort_keys=True)}"
+            recomputed = hashlib.sha256(data_to_lock.encode('utf-8')).hexdigest()
+            if recomputed != curr_hash:
+                return {
+                    "status": "HASH_MISMATCH",
+                    "tampered": True,
+                    "compromised_id": log_id,
+                    "expected_hash": recomputed,
+                    "actual_hash": curr_hash
+                }
+
+            expected_prev = curr_hash
+
+        return {
+            "status": "VERIFIED_VALID",
+            "tampered": False,
+            "verified_records": len(rows),
+            "head_hash": expected_prev
+        }
+    except Exception as e:
+        return {"status": "ERROR", "error": str(e), "tampered": None}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 def consume_audit_logs():
     """
     Connects to Redpanda, processes incoming events, applies Hash-Chaining,
