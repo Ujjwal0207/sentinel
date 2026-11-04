@@ -14,6 +14,10 @@ KAFKA_TOPIC = os.getenv("SENTINEL_KAFKA_TOPIC", "sentinel-audit-events")
 
 GATEWAY_URL = os.getenv("SENTINEL_GATEWAY_URL", "http://localhost:8080/enforce")
 
+# Cryptographic Identity & KYA Authentication Settings
+SENTINEL_AGENT_SECRET = os.getenv("SENTINEL_AGENT_SECRET", "sentinel-agent-auth-secret-2026")
+SENTINEL_STRICT_AUTH = os.getenv("SENTINEL_STRICT_AUTH", "false").lower() == "true"
+
 API_HOST = os.getenv("SENTINEL_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 
