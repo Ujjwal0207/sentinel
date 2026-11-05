@@ -1,21 +1,23 @@
-# SENTINEL Project Specific Ignores
+# SENTINEL Project & Internal Documentation Ignores
 docs/
-docs
-business_sentinel.md
-business_sentinel
-realworld_problem.md
-realworld_problem
-TEAM_ALIGNMENT_FAQ.md
-presentation_draft.md
-SENTINEL_ARCHITECTURAL_INSIGHTS.md
 sentinel_bts/
+business_sentinel*
+realworld_problem*
+CROSS_QUESTIONS*.md
+*JOURNEY*.md
+*FLAW*.md
+*PHASE*GAP*.md
 .developer_notes.md
 EXPLANATION_OF_SENTINEL.md
 PROJECT_TRACKER.md
-CROSS_QUESTIONS.md
-CROSS_QUESTIONS_ANSWERS.md
-CROSS_QUESTIONS*.md
 DEEP_CODEBASE_KNOWLEDGE.md
+SENTINEL_ARCHITECTURAL_INSIGHTS.md
+TEAM_ALIGNMENT_FAQ.md
+presentation_draft.md
+
+# Explicitly track benchmark files
+!BENCHMARKS.md
+!**/BENCHMARKS.md
 
 # Python ignores
 __pycache__/
