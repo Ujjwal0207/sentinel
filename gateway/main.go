@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -47,38 +48,60 @@ var enforcer *casbin.Enforcer
 var agentSharedSecret = "sentinel-agent-auth-secret-2026"
 var strictAuthEnabled = false
 
-// NonceCache prevents replay attacks with automatic expiration
+// Validation regexes for identifiers and nonces
+var validIdentifierRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
+var validNonceRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{16,128}$`)
+
+// NonceCache prevents replay attacks with efficient batched eviction
 type NonceCache struct {
-	mu     sync.Mutex
-	nonces map[string]time.Time
+	mu           sync.Mutex
+	nonces       map[string]time.Time
+	lastEviction time.Time
 }
 
 var nonceStore = &NonceCache{
-	nonces: make(map[string]time.Time),
+	nonces:       make(map[string]time.Time),
+	lastEviction: time.Now(),
 }
 
-func (nc *NonceCache) CheckAndRecord(nonce string, now time.Time) bool {
+func (nc *NonceCache) CheckAndRecord(nonce string, now time.Time) (bool, string) {
+	if !validNonceRegex.MatchString(nonce) {
+		return false, "Invalid nonce format or length (must be 16-128 alphanumeric characters)"
+	}
+
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
 
-	// Evict entries older than 120 seconds
-	for k, t := range nc.nonces {
-		if now.Sub(t) > 120*time.Second {
-			delete(nc.nonces, k)
+	// Batched periodic eviction every 30s to prevent O(N) lock serialization per request
+	if now.Sub(nc.lastEviction) > 30*time.Second {
+		for k, t := range nc.nonces {
+			if now.Sub(t) > 120*time.Second {
+				delete(nc.nonces, k)
+			}
 		}
+		nc.lastEviction = now
 	}
 
 	if _, exists := nc.nonces[nonce]; exists {
-		return false // Replay attack detected
+		return false, "Cryptographic nonce has already been consumed (replay attack prevention)"
 	}
 	nc.nonces[nonce] = now
-	return true
+	return true, ""
 }
 
-// Parameter Guardrail Regexprs
-var destructiveSQLRegex = regexp.MustCompile(`(?i)\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE\s+TABLE|ALTER\s+TABLE|GRANT\s+ALL|REVOKE\s+ALL)\b`)
-var unboundedDeleteRegex = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+[a-zA-Z0-9_]+\s*(;|$)`)
-var shellInjectionRegex = regexp.MustCompile(`[;&|` + "`" + `]|\$\(.*\)`)
+// Parameter Guardrail Regexes
+// SQL Comment stripper regex to neutralize inline comment bypasses like DROP/**/TABLE
+var sqlCommentRegex = regexp.MustCompile(`/\*[\s\S]*?\*/|--[^\r\n]*`)
+
+// Destructive SQL DDL/DCL patterns: matches DROP, TRUNCATE, ALTER, GRANT, REVOKE
+var destructiveSQLRegex = regexp.MustCompile(`(?i)\b(DROP\s+(TABLE|DATABASE|SCHEMA|VIEW|INDEX)|TRUNCATE(\s+TABLE)?|ALTER\s+(TABLE|DATABASE)|GRANT\s+ALL|REVOKE\s+ALL)\b`)
+var unboundedDeleteRegex = regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+[a-zA-Z0-9_.-]+(\s*;|\s*$|\s+WHERE\s+(1=1|true|'1'='1')(\s*;|\s*$))`)
+
+// System command and shell injection patterns
+var systemActionRegex = regexp.MustCompile(`(?i)^(EXEC|EXEC_TOOL|BASH|SHELL|CMD|SYSTEM_COMMAND|RUN_SCRIPT)$`)
+var commandKeyRegex = regexp.MustCompile(`(?i)^(cmd|command|script|shell|exec|query_exec)$`)
+var dangerousShellBinaries = regexp.MustCompile(`(?i)\b(rm|curl|wget|nc|bash|sh|zsh|python|python3|perl|ruby|php|chmod|chown|kill|pkill|eval|dd)\b`)
+var shellChainRegex = regexp.MustCompile(`[;&|` + "`" + `]|\$\(.*\)`)
 
 func main() {
 	// Initialize Secret and Auth Mode from environment
@@ -155,14 +178,14 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
-	// SECURITY: Strict Input Length Validation
+	// SECURITY: Strict Identifier Format & Length Validation
 	// -------------------------------------------------------------------
-	if req.AgentID == "" || len(req.AgentID) > 64 {
-		http.Error(w, "Invalid or missing agent_id (max 64 chars)", http.StatusBadRequest)
+	if !validIdentifierRegex.MatchString(req.AgentID) {
+		http.Error(w, "Invalid agent_id format (must be 1-64 alphanumeric chars/hyphens/underscores)", http.StatusBadRequest)
 		return
 	}
-	if req.Action == "" || len(req.Action) > 64 {
-		http.Error(w, "Invalid or missing action (max 64 chars)", http.StatusBadRequest)
+	if !validIdentifierRegex.MatchString(req.Action) {
+		http.Error(w, "Invalid action format (must be 1-64 alphanumeric chars/hyphens/underscores)", http.StatusBadRequest)
 		return
 	}
 	if req.Payload == nil {
@@ -192,7 +215,6 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	if !guardrailPassed {
 		log.Printf("⛔ PARAMETER GUARDRAIL BLOCKED [%s - %s]: %s", req.AgentID, req.Action, guardrailReason)
 
-		// Record audit event for forensic review
 		publishAuditEvent(GatewayEvent{
 			AgentID:   req.AgentID,
 			Action:    req.Action,
@@ -253,7 +275,10 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	decision := "DENY" // Fail-Safe Default
 	decisionReason := "Fail-Safe Default"
 
-	engineURL := "http://localhost:8000/evaluate"
+	engineURL := os.Getenv("SENTINEL_CASE_LAW_URL")
+	if engineURL == "" {
+		engineURL = "http://localhost:8000/evaluate"
+	}
 	engineReqBody, _ := json.Marshal(req)
 
 	client := &http.Client{Timeout: 2 * time.Second}
@@ -323,17 +348,25 @@ func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bo
 	nonce := r.Header.Get("X-Sentinel-Nonce")
 	headerAgentID := r.Header.Get("X-Sentinel-Agent-ID")
 
-	// If cryptographic headers are absent
-	if sig == "" || tsHeader == "" || nonce == "" {
+	// If all cryptographic headers are absent
+	if sig == "" && tsHeader == "" && nonce == "" && headerAgentID == "" {
 		if strictAuthEnabled {
-			return false, "UNAUTHENTICATED", "Missing cryptographic signature headers (X-Sentinel-Signature, X-Sentinel-Timestamp, X-Sentinel-Nonce)"
+			return false, "UNAUTHENTICATED", "Missing cryptographic signature headers (X-Sentinel-Signature, X-Sentinel-Timestamp, X-Sentinel-Nonce, X-Sentinel-Agent-ID)"
 		}
 		// Dev / Simulator fallback
 		return true, "LEGACY_UNSIGNED", ""
 	}
 
-	// 1. Agent ID consistency check
-	if headerAgentID != "" && headerAgentID != claimedAgentID {
+	// Partial header protection: if any header is provided, all required auth headers must be present
+	if sig == "" || tsHeader == "" || nonce == "" || headerAgentID == "" {
+		return false, "INCOMPLETE_AUTH_HEADERS", "All cryptographic headers must be provided (X-Sentinel-Signature, X-Sentinel-Timestamp, X-Sentinel-Nonce, X-Sentinel-Agent-ID)"
+	}
+
+	// 1. Strict Agent ID validation & match
+	if !validIdentifierRegex.MatchString(claimedAgentID) {
+		return false, "INVALID_AGENT_ID", "Claimed agent_id contains invalid characters or delimiters"
+	}
+	if headerAgentID != claimedAgentID {
 		return false, "IDENTITY_MISMATCH", fmt.Sprintf("Header agent_id (%s) does not match body agent_id (%s)", headerAgentID, claimedAgentID)
 	}
 
@@ -342,18 +375,18 @@ func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bo
 	if err != nil {
 		return false, "INVALID_TIMESTAMP", "Invalid RFC3339 timestamp format in X-Sentinel-Timestamp"
 	}
-	now := time.Now()
-	if now.Sub(t) > 60*time.Second || t.Sub(now) > 60*time.Second {
+	now := time.Now().UTC()
+	diff := now.Sub(t.UTC())
+	if diff < -60*time.Second || diff > 60*time.Second {
 		return false, "TIMESTAMP_DRIFT", "Request timestamp outside permitted drift window (±60s)"
 	}
 
-	// 3. Replay nonce check
-	if !nonceStore.CheckAndRecord(nonce, now) {
-		return false, "REPLAY_DETECTED", "Cryptographic nonce has already been consumed (replay attack prevention)"
+	// 3. Replay nonce check & validation
+	if ok, nonceErr := nonceStore.CheckAndRecord(nonce, now); !ok {
+		return false, "REPLAY_DETECTED", nonceErr
 	}
 
 	// 4. Verify HMAC-SHA256 signature
-	// Canonical message: claimedAgentID|tsHeader|nonce|SHA256(rawBody)
 	bodyHash := sha256.Sum256(rawBody)
 	canonical := fmt.Sprintf("%s|%s|%s|%s", claimedAgentID, tsHeader, nonce, hex.EncodeToString(bodyHash[:]))
 
@@ -370,30 +403,44 @@ func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bo
 
 // checkParameterGuardrails inspects SQL, Shell commands, and transaction limits
 func checkParameterGuardrails(action string, payload map[string]interface{}) (bool, string) {
-	// 1. Deep recursive inspection for destructive SQL & Shell injections
-	var inspectValue func(v interface{}) (bool, string)
-	inspectValue = func(v interface{}) (bool, string) {
+	upperAction := strings.ToUpper(action)
+	isSystemAction := systemActionRegex.MatchString(upperAction)
+
+	// 1. Recursive inspection with bounded depth (max 16 levels to prevent stack overflow)
+	var inspectValue func(key string, v interface{}, depth int) (bool, string)
+	inspectValue = func(key string, v interface{}, depth int) (bool, string) {
+		if depth > 16 {
+			return false, "Payload nesting depth exceeds safety threshold (max 16 levels)"
+		}
+
 		switch val := v.(type) {
 		case string:
-			if destructiveSQLRegex.MatchString(val) {
+			// Strip inline SQL comments (e.g. DROP/**/TABLE) before pattern evaluation
+			normalizedSQL := sqlCommentRegex.ReplaceAllString(val, " ")
+			if destructiveSQLRegex.MatchString(normalizedSQL) {
 				return false, "Destructive SQL DDL/DCL statement blocked by Parameter Guardrails"
 			}
-			if unboundedDeleteRegex.MatchString(val) {
-				return false, "Unbounded DELETE statement without WHERE clause blocked by Parameter Guardrails"
+			if unboundedDeleteRegex.MatchString(normalizedSQL) {
+				return false, "Unbounded DELETE statement without restrictive WHERE clause blocked by Parameter Guardrails"
 			}
-			// Command injection sanity check
-			if shellInjectionRegex.MatchString(val) && (strings.Contains(val, "rm ") || strings.Contains(val, "curl ") || strings.Contains(val, "bash ") || strings.Contains(val, "/bin/sh")) {
-				return false, "Arbitrary shell injection pattern detected by Parameter Guardrails"
+
+			// Context-Aware Shell Inspection:
+			// Only flag shell injection if action is a system/shell action, OR if key indicates a command/script parameter.
+			// This completely prevents false positives on user messages/descriptions (e.g., "shirts & pants; curl cream").
+			isCommandParam := isSystemAction || commandKeyRegex.MatchString(key)
+			if isCommandParam && shellChainRegex.MatchString(val) && dangerousShellBinaries.MatchString(val) {
+				return false, "Arbitrary shell command chaining detected in command parameter"
 			}
+
 		case map[string]interface{}:
-			for _, subv := range val {
-				if ok, reason := inspectValue(subv); !ok {
+			for subk, subv := range val {
+				if ok, reason := inspectValue(subk, subv, depth+1); !ok {
 					return false, reason
 				}
 			}
 		case []interface{}:
 			for _, subv := range val {
-				if ok, reason := inspectValue(subv); !ok {
+				if ok, reason := inspectValue(key, subv, depth+1); !ok {
 					return false, reason
 				}
 			}
@@ -401,43 +448,60 @@ func checkParameterGuardrails(action string, payload map[string]interface{}) (bo
 		return true, ""
 	}
 
-	if ok, reason := inspectValue(payload); !ok {
+	if ok, reason := inspectValue("", payload, 0); !ok {
 		return false, reason
 	}
 
-	// 2. Action-specific financial bounds
-	upperAction := strings.ToUpper(action)
+	// 2. Action-specific financial bounds with NaN & Inf safeguards
 	var amount float64
+	hasAmount := false
 	if rawAmount, ok := payload["amount"]; ok && rawAmount != nil {
+		hasAmount = true
 		switch a := rawAmount.(type) {
 		case float64:
 			amount = a
+		case float32:
+			amount = float64(a)
 		case int:
+			amount = float64(a)
+		case int64:
 			amount = float64(a)
 		case string:
 			cleaned := strings.ReplaceAll(strings.ReplaceAll(a, "$", ""), ",", "")
 			if parsed, err := strconv.ParseFloat(strings.TrimSpace(cleaned), 64); err == nil {
 				amount = parsed
+			} else {
+				return false, "Invalid non-numeric format for amount"
 			}
+		default:
+			return false, "Invalid data type for amount"
 		}
 	}
 
-	if amount < 0 {
-		return false, "Negative transaction amounts are strictly prohibited"
-	}
+	if hasAmount {
+		// NaN and Inf defense: In IEEE 754, NaN comparisons return false (NaN > 10000 is FALSE, NaN < 0 is FALSE).
+		// Attackers exploit this to bypass numeric boundaries.
+		if math.IsNaN(amount) || math.IsInf(amount, 0) {
+			return false, "Invalid floating-point number (NaN or Infinity detected)"
+		}
 
-	switch upperAction {
-	case "ISSUE_REFUND", "REFUND":
-		if amount > 10000.0 {
-			return false, fmt.Sprintf("Refund amount ($%.2f) exceeds Sentinel maximum refund threshold ($10,000.00)", amount)
+		if amount < 0 {
+			return false, "Negative transaction amounts are strictly prohibited"
 		}
-	case "CREDIT_INCREASE":
-		if amount > 50000.0 {
-			return false, fmt.Sprintf("Credit increase ($%.2f) exceeds Sentinel safety cap ($50,000.00)", amount)
-		}
-	case "TRANSFER":
-		if amount > 25000.0 {
-			return false, fmt.Sprintf("Transfer amount ($%.2f) exceeds single-transaction ceiling ($25,000.00)", amount)
+
+		switch upperAction {
+		case "ISSUE_REFUND", "REFUND":
+			if amount > 10000.0 {
+				return false, fmt.Sprintf("Refund amount ($%.2f) exceeds Sentinel maximum refund threshold ($10,000.00)", amount)
+			}
+		case "CREDIT_INCREASE":
+			if amount > 50000.0 {
+				return false, fmt.Sprintf("Credit increase ($%.2f) exceeds Sentinel safety cap ($50,000.00)", amount)
+			}
+		case "TRANSFER":
+			if amount > 25000.0 {
+				return false, fmt.Sprintf("Transfer amount ($%.2f) exceeds single-transaction ceiling ($25,000.00)", amount)
+			}
 		}
 	}
 
