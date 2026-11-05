@@ -39,6 +39,8 @@ func TestRealityCheckBenchmark(t *testing.T) {
 		t.Fatalf("Failed to initialize Casbin enforcer: %v", err)
 	}
 
+	globalVelocityTracker.Reset()
+
 	// Spin up local Mock Python Case Law Server (returns ALLOW for verified benign actions)
 	mockCaseLawServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
