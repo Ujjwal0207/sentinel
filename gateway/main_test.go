@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,7 +45,7 @@ func generateSignedHeaders(agentID string, rawBody []byte, secret string, tDelta
 func TestVerifyAgentAuth_Valid(t *testing.T) {
 	agentID := "ag_Travel_Bot"
 	body := []byte(`{"agent_id":"ag_Travel_Bot","action":"Issue_Refund","payload":{"amount":50.0}}`)
-	headers := generateSignedHeaders(agentID, body, agentSharedSecret, 0, "test-nonce-1")
+	headers := generateSignedHeaders(agentID, body, agentSharedSecret, 0, "test-nonce-12345678")
 
 	req := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
 	for k, v := range headers {
@@ -63,7 +64,7 @@ func TestVerifyAgentAuth_Valid(t *testing.T) {
 func TestVerifyAgentAuth_InvalidSignature(t *testing.T) {
 	agentID := "ag_Travel_Bot"
 	body := []byte(`{"agent_id":"ag_Travel_Bot","action":"Issue_Refund","payload":{"amount":50.0}}`)
-	headers := generateSignedHeaders(agentID, body, "wrong-secret-key", 0, "test-nonce-2")
+	headers := generateSignedHeaders(agentID, body, "wrong-secret-key-123", 0, "test-nonce-12345679")
 
 	req := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
 	for k, v := range headers {
@@ -82,7 +83,7 @@ func TestVerifyAgentAuth_InvalidSignature(t *testing.T) {
 func TestVerifyAgentAuth_ReplayProtection(t *testing.T) {
 	agentID := "ag_Travel_Bot"
 	body := []byte(`{"agent_id":"ag_Travel_Bot","action":"Issue_Refund","payload":{"amount":50.0}}`)
-	headers := generateSignedHeaders(agentID, body, agentSharedSecret, 0, "replayed-nonce-123")
+	headers := generateSignedHeaders(agentID, body, agentSharedSecret, 0, "replayed-nonce-12345678")
 
 	req1 := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
 	for k, v := range headers {
@@ -109,11 +110,47 @@ func TestVerifyAgentAuth_ReplayProtection(t *testing.T) {
 	}
 }
 
+func TestVerifyAgentAuth_ShortNonceRejected(t *testing.T) {
+	agentID := "ag_Travel_Bot"
+	body := []byte(`{"agent_id":"ag_Travel_Bot","action":"Issue_Refund","payload":{"amount":50.0}}`)
+	// Nonce is too short (only 8 chars, minimum is 16)
+	headers := generateSignedHeaders(agentID, body, agentSharedSecret, 0, "short123")
+
+	req := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	valid, _, errStr := verifyAgentAuth(req, body, agentID)
+	if valid {
+		t.Fatalf("Expected short nonce to be rejected")
+	}
+	t.Logf("Short nonce rejected correctly: %s", errStr)
+}
+
+func TestVerifyAgentAuth_DelimiterInjectionRejected(t *testing.T) {
+	// Attempt delimiter injection with pipe in Agent ID
+	maliciousAgentID := "ag_admin|fake_timestamp|fake_nonce"
+	body := []byte(`{"agent_id":"` + maliciousAgentID + `","action":"Issue_Refund","payload":{"amount":50.0}}`)
+	headers := generateSignedHeaders(maliciousAgentID, body, agentSharedSecret, 0, "test-nonce-12345678")
+
+	req := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	valid, _, errStr := verifyAgentAuth(req, body, maliciousAgentID)
+	if valid {
+		t.Fatalf("Expected delimiter injection in Agent ID to be rejected")
+	}
+	t.Logf("Delimiter injection correctly blocked: %s", errStr)
+}
+
 func TestVerifyAgentAuth_TimestampDrift(t *testing.T) {
 	agentID := "ag_Travel_Bot"
 	body := []byte(`{"agent_id":"ag_Travel_Bot","action":"Issue_Refund","payload":{"amount":50.0}}`)
 	// 5 minutes in the past
-	headers := generateSignedHeaders(agentID, body, agentSharedSecret, -5*time.Minute, "stale-nonce-1")
+	headers := generateSignedHeaders(agentID, body, agentSharedSecret, -5*time.Minute, "stale-nonce-12345678")
 
 	req := httptest.NewRequest("POST", "/enforce", bytes.NewBuffer(body))
 	for k, v := range headers {
@@ -144,22 +181,88 @@ func TestVerifyAgentAuth_LegacyUnsignedPassesInDevMode(t *testing.T) {
 	}
 }
 
-func TestParameterGuardrails_DestructiveSQL(t *testing.T) {
-	// Destructive SQL Injection attempt
+func TestParameterGuardrails_SQLCommentBypass(t *testing.T) {
+	// Attacker tries to bypass filter using inline SQL comments: DROP/**/TABLE
 	payload := map[string]interface{}{
-		"query": "SELECT * FROM users; DROP TABLE accounts;--",
+		"query": "SELECT * FROM users; DROP/**/TABLE/**/accounts;--",
 		"time":  "12:00:00",
 	}
 
 	passed, reason := checkParameterGuardrails("QUERY_DB", payload)
 	if passed {
-		t.Fatalf("Destructive SQL DDL DROP TABLE should have been blocked by Parameter Guardrails")
+		t.Fatalf("Comment-obfuscated SQL DDL (DROP/**/TABLE) should have been blocked")
 	}
-	t.Logf("Successfully blocked destructive SQL: %s", reason)
+	t.Logf("Comment-obfuscated SQL successfully blocked: %s", reason)
+}
+
+func TestParameterGuardrails_BareTruncate(t *testing.T) {
+	// Attacker executes TRUNCATE without the optional 'TABLE' keyword
+	payload := map[string]interface{}{
+		"query": "TRUNCATE users;",
+		"time":  "12:00:00",
+	}
+
+	passed, reason := checkParameterGuardrails("QUERY_DB", payload)
+	if passed {
+		t.Fatalf("Bare TRUNCATE statement should have been blocked")
+	}
+	t.Logf("Bare TRUNCATE successfully blocked: %s", reason)
+}
+
+func TestParameterGuardrails_NaNAmountBypass(t *testing.T) {
+	// Attacker sends math.NaN() to bypass amount > 10000 check
+	payload := map[string]interface{}{
+		"amount": math.NaN(),
+		"time":   "12:00:00",
+	}
+
+	passed, reason := checkParameterGuardrails("Issue_Refund", payload)
+	if passed {
+		t.Fatalf("NaN amount should be blocked to prevent numeric comparison bypass")
+	}
+	t.Logf("NaN amount successfully blocked: %s", reason)
+}
+
+func TestParameterGuardrails_InfinityAmountBypass(t *testing.T) {
+	// Attacker sends +Inf
+	payload := map[string]interface{}{
+		"amount": math.Inf(1),
+		"time":   "12:00:00",
+	}
+
+	passed, reason := checkParameterGuardrails("Issue_Refund", payload)
+	if passed {
+		t.Fatalf("Infinity amount should be blocked")
+	}
+	t.Logf("Infinity amount successfully blocked: %s", reason)
+}
+
+func TestParameterGuardrails_ContextAwareShellInspection(t *testing.T) {
+	// Legitimate customer dispute containing words like 'curl' and semicolons
+	legitPayload := map[string]interface{}{
+		"dispute_reason": "I purchased shirts & pants; also curl cream from this merchant.",
+		"time":           "12:00:00",
+	}
+
+	passed, reason := checkParameterGuardrails("Issue_Refund", legitPayload)
+	if !passed {
+		t.Fatalf("False positive: legitimate dispute text blocked as shell injection: %s", reason)
+	}
+	t.Logf("Legitimate customer text passed without false positive")
+
+	// Actual shell injection in a command parameter
+	maliciousPayload := map[string]interface{}{
+		"command": "cat /tmp/test; python3 -c 'import socket; s=socket.socket()'",
+	}
+
+	passedMal, reasonMal := checkParameterGuardrails("EXEC_TOOL", maliciousPayload)
+	if passedMal {
+		t.Fatalf("Actual shell command chaining should have been blocked")
+	}
+	t.Logf("Shell command injection in tool parameter blocked: %s", reasonMal)
 }
 
 func TestParameterGuardrails_ExceedRefundCeiling(t *testing.T) {
-	// Exceeds $10,000 refund safety ceiling
 	payload := map[string]interface{}{
 		"amount": 15000.0,
 		"time":   "12:00:00",
@@ -173,7 +276,6 @@ func TestParameterGuardrails_ExceedRefundCeiling(t *testing.T) {
 }
 
 func TestParameterGuardrails_LegitimateSimulatorRefund(t *testing.T) {
-	// Legitimate simulator traffic
 	payload := map[string]interface{}{
 		"amount": 45.0,
 		"time":   "12:00:00",
@@ -205,4 +307,3 @@ func TestEnforceHandler_RBAC_Block(t *testing.T) {
 		t.Fatalf("Expected status DENY in body, got %v", resp["status"])
 	}
 }
-
