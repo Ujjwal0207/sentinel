@@ -4,6 +4,7 @@ p, refund_tier, REFUND, execute
 p, credit_tier, Credit_Increase, execute
 p, general_tier, TRANSFER, execute
 p, fraud_tier, Lock_Card, execute
+p, query_tier, QUERY_DATABASE, execute
 
 # Map specific agents to roles
 g, ag_Travel_Bot, refund_tier
@@ -11,5 +12,14 @@ g, ag_Travel_Bot, general_tier
 g, ag_Dispute_AI, refund_tier
 g, ag_Dispute_AI, credit_tier
 g, ag_Dispute_AI, general_tier
+g, ag_Dispute_AI, query_tier
 g, ag_Fraud_Bot, fraud_tier
 g, ag_Rogue_Sim, refund_tier
+g, ag_Admin, refund_tier
+g, ag_Admin, credit_tier
+g, ag_Admin, general_tier
+g, ag_Admin, fraud_tier
+g, ag_Admin, query_tier
+g, ag_Support_Bot, refund_tier
+g, ag_Scraper, query_tier
+g, ag_Intern_Bot, refund_tier

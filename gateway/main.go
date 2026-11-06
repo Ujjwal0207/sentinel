@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/casbin/casbin/v2"
@@ -49,6 +52,162 @@ var enforcer *casbin.Enforcer
 // Cryptographic Identity & KYA Configuration
 var agentSharedSecret = "sentinel-agent-auth-secret-2026"
 var strictAuthEnabled = false
+
+// Google AP2 Intent Mandate Configuration (Phase 3.2)
+var intentSharedSecret = "sentinel-intent-mandate-secret-2026"
+var requireIntentMandate = false
+
+// UserIntentMandate represents a cryptographically anchored user mandate (Google AP2 Standard)
+type UserIntentMandate struct {
+	MandateID    string    `json:"mandate_id"`
+	AuthorizerID string    `json:"authorizer_id"`
+	Action       string    `json:"action"`
+	MaxAmount    float64   `json:"max_amount"`
+	Currency     string    `json:"currency"`
+	Recipient    string    `json:"recipient"`
+	IssuedAt     time.Time `json:"issued_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	Commitment   string    `json:"commitment"`
+}
+
+// MandateConsumptionTracker tracks and prevents replay of one-time user intent mandates
+type MandateConsumptionTracker struct {
+	mu        sync.Mutex
+	consumed  map[string]time.Time
+	lastPurge time.Time
+}
+
+var globalMandateTracker = &MandateConsumptionTracker{
+	consumed:  make(map[string]time.Time),
+	lastPurge: time.Now(),
+}
+
+func (mct *MandateConsumptionTracker) CheckAndConsume(mandateID string, now time.Time) (bool, string) {
+	if mandateID == "" {
+		return false, "Missing mandate_id"
+	}
+	mct.mu.Lock()
+	defer mct.mu.Unlock()
+
+	// Periodic purge of expired records older than 1 hour
+	if now.Sub(mct.lastPurge) > 60*time.Second {
+		for id, t := range mct.consumed {
+			if now.Sub(t) > 3600*time.Second {
+				delete(mct.consumed, id)
+			}
+		}
+		mct.lastPurge = now
+	}
+
+	if _, exists := mct.consumed[mandateID]; exists {
+		return false, fmt.Sprintf("MANDATE_REPLAY_DETECTED: Mandate ID (%s) has already been consumed", mandateID)
+	}
+	mct.consumed[mandateID] = now
+	return true, ""
+}
+
+func (mct *MandateConsumptionTracker) Reset() {
+	mct.mu.Lock()
+	defer mct.mu.Unlock()
+	mct.consumed = make(map[string]time.Time)
+	mct.lastPurge = time.Now()
+}
+
+// ComputeIntentCommitment calculates HMAC-SHA256 over canonicalized user intent fields (Google AP2)
+func ComputeIntentCommitment(secret, authorizerID, action string, maxAmount float64, currency, recipient, mandateID string, expiresAtUnix int64) string {
+	canonical := fmt.Sprintf("%s|%s|%.2f|%s|%s|%s|%d",
+		strings.TrimSpace(authorizerID),
+		strings.ToUpper(strings.TrimSpace(action)),
+		maxAmount,
+		strings.ToUpper(strings.TrimSpace(currency)),
+		strings.TrimSpace(recipient),
+		strings.TrimSpace(mandateID),
+		expiresAtUnix,
+	)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(canonical))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// extractPayloadRecipient looks up recipient identifiers across common alias keys
+func extractPayloadRecipient(payload map[string]interface{}) string {
+	keys := []string{"recipient", "to", "payee", "beneficiary", "target_account", "account_id", "destination_account", "user_id"}
+	for _, k := range keys {
+		if v, ok := payload[k]; ok && v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+// extractRawCurrency retrieves currency string from payload
+func extractRawCurrency(payload map[string]interface{}) string {
+	if c, ok := payload["currency"]; ok && c != nil {
+		if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+			return strings.ToUpper(strings.TrimSpace(s))
+		}
+	}
+	if c, ok := payload["curr"]; ok && c != nil {
+		if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+			return strings.ToUpper(strings.TrimSpace(s))
+		}
+	}
+	return "USD"
+}
+
+// extractNativeFinancialAmount extracts the unadjusted native financial amount (before FX conversion)
+func extractNativeFinancialAmount(payload map[string]interface{}) (bool, float64, string) {
+	aliases := []string{"amount", "transfer_amount", "refund_amount", "total", "value", "payout", "amount_in_cents", "cents"}
+	var rawAmount interface{}
+	var matchedKey string
+	hasAmount := false
+
+	for _, alias := range aliases {
+		if v, ok := payload[alias]; ok && v != nil {
+			rawAmount = v
+			matchedKey = alias
+			hasAmount = true
+			break
+		}
+	}
+
+	if !hasAmount {
+		return false, 0, ""
+	}
+
+	var amount float64
+	switch a := rawAmount.(type) {
+	case float64:
+		amount = a
+	case float32:
+		amount = float64(a)
+	case int:
+		amount = float64(a)
+	case int64:
+		amount = float64(a)
+	case string:
+		cleaned := strings.ReplaceAll(strings.ReplaceAll(a, "$", ""), ",", "")
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(cleaned), 64); err == nil {
+			amount = parsed
+		} else {
+			return true, 0, "Invalid non-numeric format for amount"
+		}
+	default:
+		return true, 0, "Invalid data type for amount"
+	}
+
+	if math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return true, 0, "Invalid floating-point number (NaN or Infinity detected)"
+	}
+
+	if matchedKey == "amount_in_cents" || matchedKey == "cents" {
+		amount = amount / 100.0
+	}
+
+	return true, amount, ""
+}
 
 // Validation regexes for identifiers and nonces
 var validIdentifierRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
@@ -290,6 +449,247 @@ func (s *ShardedVelocityTracker) Reset() {
 		s.shards[i].history = make(map[string][]VelocityEntry)
 		s.shards[i].mu.Unlock()
 	}
+	if globalStateMesh != nil {
+		_ = globalStateMesh.Reset(context.Background())
+	}
+}
+
+func (nc *NonceCache) Reset() {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.nonces = make(map[string]time.Time)
+	nc.lastEviction = time.Now()
+}
+
+// -------------------------------------------------------------------
+// PHASE 3.1: Socket-Level Transport Defense & TOCTOU Rebinding Prevention
+// -------------------------------------------------------------------
+
+// IsRestrictedOrPrivateIP checks whether an IP address belongs to any private, loopback, link-local,
+// carrier-grade NAT, multicast, reserved, documentation, or cloud metadata ranges (IPv4 & IPv6).
+func IsRestrictedOrPrivateIP(ip net.IP) (bool, string) {
+	if ip == nil {
+		return true, "Invalid or unparseable IP address"
+	}
+
+	// Detailed IPv4 evaluation (including IPv4-mapped IPv6)
+	if ip4 := ip.To4(); ip4 != nil {
+		// 127.0.0.0/8 (Loopback)
+		if ip4[0] == 127 || ip.IsLoopback() {
+			return true, fmt.Sprintf("IPv4 loopback address (%s) blocked", ip)
+		}
+		// 169.254.0.0/16 (Link-Local / Cloud Metadata IMDS)
+		if ip4[0] == 169 && ip4[1] == 254 {
+			return true, fmt.Sprintf("Link-local cloud metadata address (%s) blocked (Cloud metadata risk)", ip)
+		}
+		// 10.0.0.0/8 (RFC 1918 Private)
+		if ip4[0] == 10 {
+			return true, fmt.Sprintf("RFC 1918 private address (%s) blocked", ip)
+		}
+		// 172.16.0.0/12 (RFC 1918 Private: 172.16.0.0 - 172.31.255.255)
+		if ip4[0] == 172 && (ip4[1] >= 16 && ip4[1] <= 31) {
+			return true, fmt.Sprintf("RFC 1918 private address (%s) blocked", ip)
+		}
+		// 192.168.0.0/16 (RFC 1918 Private)
+		if ip4[0] == 192 && ip4[1] == 168 {
+			return true, fmt.Sprintf("RFC 1918 private address (%s) blocked", ip)
+		}
+		// 100.64.0.0/10 (Carrier-Grade NAT RFC 6598: 100.64.0.0 - 100.127.255.255)
+		if ip4[0] == 100 && (ip4[1] >= 64 && ip4[1] <= 127) {
+			return true, fmt.Sprintf("Carrier-Grade NAT address (%s) blocked (RFC 6598)", ip)
+		}
+		// 0.0.0.0/8 (Broadcast/Current network)
+		if ip4[0] == 0 {
+			return true, fmt.Sprintf("Broadcast / Current network address (%s) blocked", ip)
+		}
+		// 192.0.2.0/24 (TEST-NET-1 RFC 5737)
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2 {
+			return true, fmt.Sprintf("Documentation subnet address (%s) blocked (RFC 5737)", ip)
+		}
+		// 198.51.100.0/24 (TEST-NET-2 RFC 5737)
+		if ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100 {
+			return true, fmt.Sprintf("Documentation subnet address (%s) blocked (RFC 5737)", ip)
+		}
+		// 203.0.113.0/24 (TEST-NET-3 RFC 5737)
+		if ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113 {
+			return true, fmt.Sprintf("Documentation subnet address (%s) blocked (RFC 5737)", ip)
+		}
+		// 198.18.0.0/15 (Benchmarking RFC 2544: 198.18.0.0 - 198.19.255.255)
+		if ip4[0] == 198 && (ip4[1] == 18 || ip4[1] == 19) {
+			return true, fmt.Sprintf("Benchmarking network address (%s) blocked (RFC 2544)", ip)
+		}
+		// 224.0.0.0/4 (Multicast RFC 5771: 224.0.0.0 - 239.255.255.255)
+		if ip4[0] >= 224 && ip4[0] <= 239 {
+			return true, fmt.Sprintf("Multicast address (%s) blocked", ip)
+		}
+		// 255.255.255.255 (Limited broadcast)
+		if ip4[0] == 255 && ip4[1] == 255 && ip4[2] == 255 && ip4[3] == 255 {
+			return true, fmt.Sprintf("Limited broadcast address (%s) blocked", ip)
+		}
+		// 240.0.0.0/4 (Reserved / Future use RFC 1112)
+		if ip4[0] >= 240 {
+			return true, fmt.Sprintf("Reserved/Multicast address (%s) blocked", ip)
+		}
+		if ip.IsPrivate() {
+			return true, fmt.Sprintf("Private network address (%s) blocked", ip)
+		}
+		return false, ""
+	}
+
+	// 16-byte IPv6 evaluation
+	if ip.IsLoopback() {
+		return true, fmt.Sprintf("IPv6 Loopback address (%s) blocked", ip)
+	}
+	if ip.IsUnspecified() {
+		return true, fmt.Sprintf("IPv6 Unspecified address (%s) blocked", ip)
+	}
+	if len(ip) == 16 {
+		// IPv6 Unique-Local Address (fc00::/7 - fc00... to fdff...)
+		if ip[0] == 0xfc || ip[0] == 0xfd || ip.IsPrivate() {
+			return true, fmt.Sprintf("IPv6 Unique Local Address (%s) blocked (RFC 4193 / Cloud IMDSv2)", ip)
+		}
+		// IPv6 Link-Local (fe80::/10)
+		if (ip[0] == 0xfe && (ip[1]&0xc0) == 0x80) || ip.IsLinkLocalUnicast() {
+			return true, fmt.Sprintf("IPv6 Link-Local Address (%s) blocked (RFC 4291)", ip)
+		}
+		// 6to4 encapsulation (2002::/16) - embedded IPv4 in bytes 2..6
+		if ip[0] == 0x20 && ip[1] == 0x02 {
+			embeddedIPv4 := net.IPv4(ip[2], ip[3], ip[4], ip[5])
+			if restricted, reason := IsRestrictedOrPrivateIP(embeddedIPv4); restricted {
+				return true, fmt.Sprintf("IPv6 6to4 encapsulation embeds restricted address: %s", reason)
+			}
+		}
+	}
+	if ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
+		return true, fmt.Sprintf("Multicast address (%s) blocked", ip)
+	}
+
+	return false, ""
+}
+
+// HardenedSocketControl intercepts raw TCP socket creation at the OS level (connect syn-ack instant)
+// rendering dynamic DNS rebinding (TOCTOU) structurally impossible.
+func HardenedSocketControl(network, address string, c syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("TRANSPORT_GUARD: Unparseable IP address in socket connection: %q", host)
+	}
+
+	if restricted, reason := IsRestrictedOrPrivateIP(ip); restricted {
+		return fmt.Errorf("TRANSPORT_GUARD: TCP handshake blocked to restricted destination (%s): %s", ip, reason)
+	}
+
+	return nil
+}
+
+// CreateHardenedDialer produces a net.Dialer equipped with low-level socket interception
+func CreateHardenedDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   HardenedSocketControl,
+	}
+}
+
+// CreateHardenedHTTPTransport produces an http.Transport with physical socket-level pinning
+func CreateHardenedHTTPTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:           CreateHardenedDialer().DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// ValidateOutboundURLTransport performs deep verification of a URL, resolving DNS records
+// and auditing every resolved IP against restricted subnets before any socket dial can occur.
+func ValidateOutboundURLTransport(rawURL string) (bool, string) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false, fmt.Sprintf("Invalid URL syntax: %v", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false, fmt.Sprintf("Dangerous protocol (%s://) is strictly prohibited (only HTTP/HTTPS allowed)", scheme)
+	}
+
+	host := strings.TrimSuffix(parsed.Hostname(), ".")
+	if host == "" {
+		return false, "Empty hostname in URL"
+	}
+
+	lowerHost := strings.ToLower(host)
+	if lowerHost == "169.254.169.254" || lowerHost == "metadata.google.internal" || lowerHost == "instance-data" || lowerHost == "localhost" {
+		return false, fmt.Sprintf("SSRF blocked: Known metadata/localhost endpoint (%s)", host)
+	}
+
+	// Check if host is decimal/hex integer IP
+	if decIP, err := strconv.ParseUint(host, 0, 32); err == nil {
+		ip := net.IPv4(byte(decIP>>24), byte(decIP>>16), byte(decIP>>8), byte(decIP))
+		if restricted, reason := IsRestrictedOrPrivateIP(ip); restricted {
+			return false, fmt.Sprintf("SSRF blocked: Encoded IP (%s -> %s): %s", host, ip, reason)
+		}
+	}
+
+	// Check for dotted octal/hex notation (e.g. 0177.0.0.1, 0x7f.0.0.1, 0251.0376.0251.0376)
+	parts := strings.Split(host, ".")
+	if len(parts) == 4 {
+		var octets [4]byte
+		validDotted := true
+		hasNonDecimal := false
+		for idx, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if strings.HasPrefix(trimmed, "0x") || strings.HasPrefix(trimmed, "0X") || (len(trimmed) > 1 && trimmed[0] == '0') {
+				hasNonDecimal = true
+			}
+			val, pErr := strconv.ParseUint(trimmed, 0, 8)
+			if pErr != nil {
+				validDotted = false
+				break
+			}
+			octets[idx] = byte(val)
+		}
+		if validDotted && hasNonDecimal {
+			dottedIP := net.IPv4(octets[0], octets[1], octets[2], octets[3])
+			if restricted, reason := IsRestrictedOrPrivateIP(dottedIP); restricted {
+				return false, fmt.Sprintf("SSRF blocked: Encoded octal/hex IP (%s -> %s): %s", host, dottedIP.String(), reason)
+			}
+		}
+	}
+
+	// Check if literal IP
+	if ip := net.ParseIP(host); ip != nil {
+		if restricted, reason := IsRestrictedOrPrivateIP(ip); restricted {
+			return false, fmt.Sprintf("SSRF blocked: Literal IP (%s): %s", host, reason)
+		}
+		return true, ""
+	}
+
+	// Check suspicious domain patterns
+	if strings.Contains(lowerHost, "rebind") || strings.Contains(lowerHost, ".internal") || strings.Contains(lowerHost, ".local") {
+		return false, fmt.Sprintf("SSRF blocked: Suspicious domain pattern (%s) associated with DNS rebinding or internal metadata", host)
+	}
+
+	// Resolve DNS hostnames to verify that all resolved IPs are safe
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false, fmt.Sprintf("DNS resolution failed for host %s: %v", host, err)
+	}
+
+	for _, resolvedIP := range ips {
+		if restricted, reason := IsRestrictedOrPrivateIP(resolvedIP); restricted {
+			return false, fmt.Sprintf("DNS Rebinding / SSRF blocked: Domain %s resolved to restricted IP (%s): %s", host, resolvedIP, reason)
+		}
+	}
+
+	return true, ""
 }
 
 // inspectSSRFProtection validates URLs against private RFC 1918 subnets, loopback, cloud metadata, and DNS rebinding
@@ -308,7 +708,7 @@ func inspectSSRFProtection(rawURL string) (bool, string) {
 		return true, ""
 	}
 
-	host := parsed.Hostname()
+	host := strings.TrimSuffix(parsed.Hostname(), ".")
 	if host == "" {
 		return true, ""
 	}
@@ -321,16 +721,42 @@ func inspectSSRFProtection(rawURL string) (bool, string) {
 	// Check if host is an integer representation (decimal IP like 2130706433 or octal/hex)
 	if decIP, err := strconv.ParseUint(host, 0, 32); err == nil {
 		ip := net.IPv4(byte(decIP>>24), byte(decIP>>16), byte(decIP>>8), byte(decIP))
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-			return false, fmt.Sprintf("SSRF blocked: Encoded IP address (%s -> %s) resolves to forbidden subnet", host, ip.String())
+		if restricted, reason := IsRestrictedOrPrivateIP(ip); restricted {
+			return false, fmt.Sprintf("SSRF blocked: Encoded IP address (%s -> %s) resolves to forbidden subnet (%s)", host, ip.String(), reason)
+		}
+	}
+
+	// Check for dotted octal/hex notation (e.g. 0177.0.0.1, 0x7f.0.0.1, 0251.0376.0251.0376)
+	parts := strings.Split(host, ".")
+	if len(parts) == 4 {
+		var octets [4]byte
+		validDotted := true
+		hasNonDecimal := false
+		for idx, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if strings.HasPrefix(trimmed, "0x") || strings.HasPrefix(trimmed, "0X") || (len(trimmed) > 1 && trimmed[0] == '0') {
+				hasNonDecimal = true
+			}
+			val, pErr := strconv.ParseUint(trimmed, 0, 8)
+			if pErr != nil {
+				validDotted = false
+				break
+			}
+			octets[idx] = byte(val)
+		}
+		if validDotted && hasNonDecimal {
+			dottedIP := net.IPv4(octets[0], octets[1], octets[2], octets[3])
+			if restricted, reason := IsRestrictedOrPrivateIP(dottedIP); restricted {
+				return false, fmt.Sprintf("SSRF blocked: Encoded octal/hex IP address (%s -> %s) resolves to forbidden subnet (%s)", host, dottedIP.String(), reason)
+			}
 		}
 	}
 
 	// Parse literal IP
 	ip := net.ParseIP(host)
 	if ip != nil {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
-			return false, fmt.Sprintf("SSRF blocked: Access to private IP / loopback endpoint (%s) is prohibited", host)
+		if restricted, reason := IsRestrictedOrPrivateIP(ip); restricted {
+			return false, fmt.Sprintf("SSRF blocked: Access to private IP / loopback endpoint (%s) is prohibited (%s)", host, reason)
 		}
 		return true, ""
 	}
@@ -353,6 +779,15 @@ func main() {
 		log.Println("🔒 STRICT KYA AUTH ENFORCED: Unsigned requests will be rejected with HTTP 401.")
 	} else {
 		log.Println("🔓 DUAL-MODE KYA ACTIVE: Both signed and legacy requests accepted (Dev/Simulator mode).")
+	}
+
+	// Initialize Intent Mandate Configuration (Google AP2)
+	if envIntentSecret := os.Getenv("SENTINEL_INTENT_SECRET"); envIntentSecret != "" {
+		intentSharedSecret = envIntentSecret
+	}
+	if os.Getenv("SENTINEL_REQUIRE_INTENT_MANDATE") == "true" {
+		requireIntentMandate = true
+		log.Println("🔒 STRICT INTENT MANDATE ENFORCED: Requests require valid User Intent Commitment (Google AP2).")
 	}
 
 	// 1. Initialize Kafka Producer
@@ -390,10 +825,11 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":      "HEALTHY",
-		"service":     "sentinel-edge-gateway",
-		"strict_auth": strictAuthEnabled,
-		"timestamp":   time.Now().Format(time.RFC3339),
+		"status":                 "HEALTHY",
+		"service":                "sentinel-edge-gateway",
+		"strict_auth":            strictAuthEnabled,
+		"require_intent_mandate": requireIntentMandate,
+		"timestamp":              time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -445,17 +881,74 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
+	// SECURITY: Swarm-Wide Emergency Freeze Kill Switch (Phase 3.4)
+	// -------------------------------------------------------------------
+	if globalStateMesh != nil {
+		if frozen, reason, _ := globalStateMesh.IsFleetFrozen(r.Context()); frozen {
+			if req.AgentID != "ag_Admin" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status":  "DENY",
+					"error":   "FLEET_FROZEN",
+					"message": fmt.Sprintf("Swarm-wide emergency freeze active: %s", reason),
+				})
+				return
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------
 	// SECURITY: Cryptographic Agent Identity (KYA) & Replay Defense
 	// -------------------------------------------------------------------
 	authValid, authMode, authErr := verifyAgentAuth(r, rawBody, req.AgentID)
 	if !authValid {
-		log.Printf("⛔ KYA AUTH FAILED for [%s]: %s", req.AgentID, authErr)
+		log.Printf("⛔ KYA AUTH FAILED for [%s]: %s (%s)", req.AgentID, authErr, authMode)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
+		statusCode := http.StatusUnauthorized
+		if strings.HasPrefix(authMode, "UCAN_DENIED_") {
+			var code int
+			if n, _ := fmt.Sscanf(authMode, "UCAN_DENIED_%d", &code); n == 1 && code > 0 {
+				statusCode = code
+			} else {
+				statusCode = http.StatusForbidden
+			}
+		} else if authMode == "INVALID_AGENT_ID" || authMode == "INVALID_UCAN_PAYLOAD" {
+			statusCode = http.StatusBadRequest
+		}
+		w.WriteHeader(statusCode)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "DENY",
-			"error":   "AUTHENTICATION_REQUIRED",
+			"error":   authMode,
 			"message": authErr,
+		})
+		return
+	}
+
+	// -------------------------------------------------------------------
+	// SECURITY: Google AP2 User Intent Mandate & Drift Anchor (Phase 3.2)
+	// -------------------------------------------------------------------
+	intentValid, intentCode, intentReason, _ := verifyIntentMandate(r, req)
+	if !intentValid {
+		log.Printf("⛔ INTENT MANDATE DRIFT BLOCKED [%s - %s]: %s (HTTP %d)", req.AgentID, req.Action, intentReason, intentCode)
+
+		publishAuditEvent(GatewayEvent{
+			AgentID:   req.AgentID,
+			Action:    req.Action,
+			Payload:   req.Payload,
+			Decision:  "DENY",
+			Timestamp: time.Now().Format(time.RFC3339),
+			AuthMode:  authMode,
+			Reason:    "INTENT_MANDATE_DRIFT: " + intentReason,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(intentCode)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "DENY",
+			"error":   "INTENT_MANDATE_DRIFT",
+			"message": intentReason,
+			"code":    intentCode,
 		})
 		return
 	}
@@ -488,10 +981,20 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
-	// SECURITY: BSA/FinCEN Anti-Structuring & Sliding-Window Velocity Guardrail
+	// SECURITY: BSA/FinCEN Anti-Structuring & Sliding-Window Velocity Guardrail (Phase 3.4)
 	// -------------------------------------------------------------------
 	if hasAmt, normalizedAmount, _ := extractNormalizedFinancialAmount(req.Payload); hasAmt && normalizedAmount > 0 {
-		allowed, totalVelocity, maxLimit := globalVelocityTracker.CheckAndRecord(req.AgentID, normalizedAmount, time.Now())
+		var allowed bool
+		var totalVelocity, maxLimit float64
+		if globalStateMesh != nil {
+			var err error
+			allowed, totalVelocity, maxLimit, err = globalStateMesh.CheckAndRecordVelocity(r.Context(), req.AgentID, normalizedAmount, 1*time.Hour, 25000.0, time.Now())
+			if err != nil {
+				log.Printf("⚠️ Global state mesh velocity error: %v", err)
+			}
+		} else {
+			allowed, totalVelocity, maxLimit = globalVelocityTracker.CheckAndRecord(req.AgentID, normalizedAmount, time.Now())
+		}
 		if !allowed {
 			log.Printf("⛔ AML VELOCITY EXCEEDED [%s - %s]: Rolling volume ($%.2f) exceeds safety cap ($%.2f)", req.AgentID, req.Action, totalVelocity, maxLimit)
 			publishAuditEvent(GatewayEvent{
@@ -518,7 +1021,7 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	// -------------------------------------------------------------------
 	// SECURITY: Casbin RBAC Edge Check
 	// -------------------------------------------------------------------
-	if enforcer != nil {
+	if enforcer != nil && authMode != "AUTHENTICATED_UCAN" {
 		ok, err := enforcer.Enforce(req.AgentID, req.Action, "execute")
 		if err != nil {
 			log.Printf("⚠️ Casbin error: %v", err)
@@ -621,15 +1124,16 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// verifyAgentAuth validates Ed25519 or HMAC signatures and checks replay nonces
+// verifyAgentAuth validates Ed25519, UCAN, or HMAC signatures and checks replay nonces
 func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bool, string, string) {
 	sig := r.Header.Get("X-Sentinel-Signature")
 	tsHeader := r.Header.Get("X-Sentinel-Timestamp")
 	nonce := r.Header.Get("X-Sentinel-Nonce")
 	headerAgentID := r.Header.Get("X-Sentinel-Agent-ID")
+	ucanHeader := r.Header.Get("X-Sentinel-UCAN")
 
 	// If all cryptographic headers are absent
-	if sig == "" && tsHeader == "" && nonce == "" && headerAgentID == "" {
+	if sig == "" && tsHeader == "" && nonce == "" && headerAgentID == "" && ucanHeader == "" {
 		if strictAuthEnabled {
 			return false, "UNAUTHENTICATED", "Missing cryptographic signature headers (X-Sentinel-Signature, X-Sentinel-Timestamp, X-Sentinel-Nonce, X-Sentinel-Agent-ID)"
 		}
@@ -661,13 +1165,74 @@ func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bo
 		return false, "TIMESTAMP_DRIFT", "Request timestamp outside permitted drift window (±60s)"
 	}
 
-	// 3. Replay nonce check & validation
+	// 3. Cluster-Wide Replay Nonce Check (Phase 3.4 Distributed State Mesh)
+	if globalStateMesh != nil {
+		if ok, clusterErr := globalStateMesh.CheckAndConsumeNonce(r.Context(), claimedAgentID, nonce, now, 120*time.Second); !ok {
+			return false, "REPLAY_DETECTED", clusterErr
+		}
+	}
 	if ok, nonceErr := nonceStore.CheckAndRecord(nonce, now); !ok {
 		return false, "REPLAY_DETECTED", nonceErr
 	}
 
-	// 4. Verify HMAC-SHA256 signature
 	bodyHash := sha256.Sum256(rawBody)
+
+	// 4. Check for UCAN Delegation Mode (Phase 3.3)
+	if ucanHeader != "" {
+		var token UCANToken
+		tokenBytes := []byte(ucanHeader)
+		trimmedHeader := strings.TrimSpace(ucanHeader)
+		if !strings.HasPrefix(trimmedHeader, "{") {
+			decoded, err := base64.StdEncoding.DecodeString(trimmedHeader)
+			if err == nil {
+				tokenBytes = decoded
+			}
+		}
+		if err := json.Unmarshal(tokenBytes, &token); err != nil {
+			return false, "INVALID_UCAN_PAYLOAD", fmt.Sprintf("Malformed UCAN token JSON: %v", err)
+		}
+
+		// Leaf agent must sign the canonical request payload with its Ed25519 key
+		leafKey, hasLeafKey := globalKeyRegistry.GetKey(claimedAgentID)
+		if !hasLeafKey {
+			return false, "UNAUTHENTICATED_AGENT_KEY", fmt.Sprintf("No registered public key for leaf agent (%s)", claimedAgentID)
+		}
+		if !VerifyCanonicalPayloadEd25519(leafKey, claimedAgentID, tsHeader, nonce, bodyHash[:], sig) {
+			return false, "INVALID_ED25519_SIGNATURE", "Leaf agent signature verification failed over request payload"
+		}
+
+		// Extract target action and payload from rawBody
+		var tmpReq AgentRequest
+		_ = json.Unmarshal(rawBody, &tmpReq)
+
+		trustedRoots := map[string]bool{
+			"ag_Admin":          true,
+			"ag_Root_Authority": true,
+			"did:key:admin":     true,
+			"ag_Dispute_AI":     true,
+		}
+
+		valid, ucanCode, ucanErr := VerifyUCANDelegationChain(&token, claimedAgentID, tmpReq.Action, tmpReq.Payload, now, globalKeyRegistry, trustedRoots)
+		if !valid {
+			return false, fmt.Sprintf("UCAN_DENIED_%d", ucanCode), ucanErr
+		}
+		return true, "AUTHENTICATED_UCAN", ""
+	}
+
+	// 5. Check for Asymmetric Ed25519 Authentication (Phase 3.3)
+	authScheme := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Sentinel-Auth-Scheme")))
+	pubKey, hasEd25519Key := globalKeyRegistry.GetKey(claimedAgentID)
+	if authScheme == "ed25519" || (hasEd25519Key && len(strings.TrimSpace(sig)) == 128) {
+		if !hasEd25519Key {
+			return false, "UNAUTHENTICATED_AGENT_KEY", fmt.Sprintf("No Ed25519 public key registered for agent (%s)", claimedAgentID)
+		}
+		if !VerifyCanonicalPayloadEd25519(pubKey, claimedAgentID, tsHeader, nonce, bodyHash[:], sig) {
+			return false, "INVALID_ED25519_SIGNATURE", "Ed25519 asymmetric signature verification failed"
+		}
+		return true, "AUTHENTICATED_ED25519", ""
+	}
+
+	// 6. Verify HMAC-SHA256 signature (Legacy / Symmetric Mode)
 	canonical := fmt.Sprintf("%s|%s|%s|%s", claimedAgentID, tsHeader, nonce, hex.EncodeToString(bodyHash[:]))
 
 	mac := hmac.New(sha256.New, []byte(agentSharedSecret))
@@ -679,6 +1244,123 @@ func verifyAgentAuth(r *http.Request, rawBody []byte, claimedAgentID string) (bo
 	}
 
 	return true, "AUTHENTICATED_HMAC", ""
+}
+
+// verifyIntentMandate enforces the Google AP2 User Intent Mandate protocol, ensuring that
+// downstream tool invocations have not drifted in action, amount, currency, or recipient from
+// the user's initial cryptographically anchored mandate.
+func verifyIntentMandate(r *http.Request, req AgentRequest) (bool, int, string, *UserIntentMandate) {
+	sigHeader := r.Header.Get("X-Sentinel-Intent-Commitment")
+	authorizerHeader := r.Header.Get("X-Sentinel-Intent-Authorizer")
+	mandateIDHeader := r.Header.Get("X-Sentinel-Intent-Mandate-ID")
+	maxAmtHeader := r.Header.Get("X-Sentinel-Intent-Max-Amount")
+	currHeader := r.Header.Get("X-Sentinel-Intent-Currency")
+	recipientHeader := r.Header.Get("X-Sentinel-Intent-Recipient")
+	expiresHeader := r.Header.Get("X-Sentinel-Intent-Expires")
+
+	// If no intent commitment header is present
+	if sigHeader == "" && authorizerHeader == "" && mandateIDHeader == "" && maxAmtHeader == "" && expiresHeader == "" {
+		if requireIntentMandate {
+			return false, http.StatusForbidden, "MANDATE_REQUIRED: Action requires cryptographic User Intent Mandate (Google AP2)", nil
+		}
+		return true, http.StatusOK, "NO_MANDATE_APPLIED", nil
+	}
+
+	// Partial header protection: if any intent header is provided, core fields must all be present
+	if sigHeader == "" || authorizerHeader == "" || mandateIDHeader == "" || maxAmtHeader == "" || expiresHeader == "" {
+		return false, http.StatusBadRequest, "INCOMPLETE_INTENT_HEADERS: Mandate headers require Commitment, Authorizer, Mandate-ID, Max-Amount, and Expires", nil
+	}
+
+	if currHeader == "" {
+		currHeader = "USD"
+	}
+	currHeader = strings.ToUpper(strings.TrimSpace(currHeader))
+
+	maxAmount, err := strconv.ParseFloat(strings.TrimSpace(maxAmtHeader), 64)
+	if err != nil || maxAmount < 0 || math.IsNaN(maxAmount) || math.IsInf(maxAmount, 0) {
+		return false, http.StatusBadRequest, "INVALID_MANDATE_AMOUNT: Max-Amount must be a valid non-negative number", nil
+	}
+
+	expiresUnix, err := strconv.ParseInt(strings.TrimSpace(expiresHeader), 10, 64)
+	if err != nil {
+		if t, tErr := time.Parse(time.RFC3339, expiresHeader); tErr == nil {
+			expiresUnix = t.Unix()
+		} else {
+			return false, http.StatusBadRequest, "INVALID_MANDATE_EXPIRY: Expires header must be unix timestamp or RFC3339", nil
+		}
+	}
+
+	now := time.Now().UTC()
+	// 1. Expiration check
+	if now.Unix() > expiresUnix {
+		return false, http.StatusUnprocessableEntity, fmt.Sprintf("MANDATE_EXPIRED: User intent mandate expired at unix %d (current: %d)", expiresUnix, now.Unix()), nil
+	}
+
+	// 2. Cryptographic commitment verification
+	expectedSig := ComputeIntentCommitment(
+		intentSharedSecret,
+		authorizerHeader,
+		req.Action,
+		maxAmount,
+		currHeader,
+		recipientHeader,
+		mandateIDHeader,
+		expiresUnix,
+	)
+
+	if !hmac.Equal([]byte(strings.ToLower(sigHeader)), []byte(strings.ToLower(expectedSig))) {
+		return false, http.StatusUnauthorized, "INTENT_COMMITMENT_FORGERY: Cryptographic mandate commitment signature mismatch", nil
+	}
+
+	// 3. Mandate replay check (consumed only after cryptographic validity is verified)
+	if ok, reason := globalMandateTracker.CheckAndConsume(mandateIDHeader, now); !ok {
+		return false, http.StatusUnprocessableEntity, reason, nil
+	}
+
+	// 4. Action Drift Check
+	if actionHeader := r.Header.Get("X-Sentinel-Intent-Action"); actionHeader != "" {
+		if !strings.EqualFold(strings.TrimSpace(actionHeader), strings.TrimSpace(req.Action)) {
+			return false, http.StatusUnprocessableEntity, fmt.Sprintf("INTENT_ACTION_DRIFT: Authorized action (%s) diverges from executed action (%s)", actionHeader, req.Action), nil
+		}
+	}
+
+	// 5. Currency Drift Check
+	payloadCurrency := extractRawCurrency(req.Payload)
+	if !strings.EqualFold(payloadCurrency, currHeader) {
+		return false, http.StatusUnprocessableEntity, fmt.Sprintf("INTENT_CURRENCY_DRIFT: Authorized currency (%s) diverges from executed currency (%s)", currHeader, payloadCurrency), nil
+	}
+
+	// 6. Amount Inflation Drift Check
+	hasAmt, rawNativeAmt, amtErr := extractNativeFinancialAmount(req.Payload)
+	if hasAmt {
+		if amtErr != "" {
+			return false, http.StatusBadRequest, amtErr, nil
+		}
+		if rawNativeAmt > maxAmount+0.0001 {
+			return false, http.StatusUnprocessableEntity, fmt.Sprintf("INTENT_AMOUNT_INFLATION: Attempted amount (%.2f %s) exceeds authorized mandate ceiling (%.2f %s)", rawNativeAmt, payloadCurrency, maxAmount, currHeader), nil
+		}
+	}
+
+	// 7. Recipient Substitution Drift Check
+	payloadRecipient := extractPayloadRecipient(req.Payload)
+	if recipientHeader != "" && payloadRecipient != "" {
+		if !strings.EqualFold(strings.TrimSpace(payloadRecipient), strings.TrimSpace(recipientHeader)) {
+			return false, http.StatusUnprocessableEntity, fmt.Sprintf("INTENT_RECIPIENT_DRIFT: Authorized recipient (%s) diverges from executed recipient (%s)", recipientHeader, payloadRecipient), nil
+		}
+	}
+
+	mandate := &UserIntentMandate{
+		MandateID:    mandateIDHeader,
+		AuthorizerID: authorizerHeader,
+		Action:       req.Action,
+		MaxAmount:    maxAmount,
+		Currency:     currHeader,
+		Recipient:    recipientHeader,
+		ExpiresAt:    time.Unix(expiresUnix, 0),
+		Commitment:   sigHeader,
+	}
+
+	return true, http.StatusOK, "INTENT_MANDATE_VERIFIED", mandate
 }
 
 // extractNormalizedFinancialAmount extracts financial values across known aliases, handles minor units (cents), and normalizes FX to USD
