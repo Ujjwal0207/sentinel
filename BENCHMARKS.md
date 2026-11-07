@@ -311,6 +311,24 @@ Implemented in [`gateway/phase5_to_10_enterprise_benchmark_test.go`](gateway/pha
 - **Dynamic Adversarial Prompt Perturbation:** Evaluated obfuscated prompt injections, whitespace padding, case-flipping, and destructive SQL queries with **0.00% False Negative Rate**.
 - **Multi-Agent Collusion & Tainted Parameters:** Verified that colluding agents attempting financial mutations using tainted data origins were blocked.
 
+### 7. Phase 11: Dynamic Declarative Policy Engine (`SPL-001..050` - 50 Scenarios)
+- **Native SPL Parser & AST Grammar:** Validated strict parser grammar for `permit` / `deny` rules with multi-principal / action target selectors (`principal in [...]`, `action == "..."`) and complex boolean expressions (`&&`, `||`, `!`).
+- **Runtime Policy Evaluation:** Measured in-memory AST condition evaluation executing in **$222.1\text{ ns/op}$ ($0.22\,\mu\text{s}$)** with zero CGO dependencies (over $7\times$ faster than Casbin's $1,574\text{ ns}$).
+- **Atomic Pointer Hot-Reloading:** Verified instantaneous hot-reloads via `atomic.Pointer[CompiledPolicySet]` in $< 100\,\mu\text{s}$ under high-concurrency read operations with zero locking latency.
+- **Strict Syntax & Type Diagnostics:** Successfully caught and rejected syntax errors, unclosed strings, missing condition braces, and invalid list operands at compile time.
+
+### 8. Phase 12: Tier-2 Multilingual Semantic Guardrail (`ML-001..050` - 50 Scenarios)
+- **Cross-Lingual Script Detection:** Deterministically identified scripts across Russian (Cyrillic), Simplified Chinese (CJK), Hindi (Devanagari), Spanish (Latin-Extended), Arabic (Perso-Arabic), English, and mixed adversarial code-switching.
+- **Cyrillic / Latin Homoglyph Normalization:** Neutralized visual homoglyph substitutions (e.g. Cyrillic `о`, `а`, `е`, `р`, `с`, `у`, `х` mixed with Latin characters) to defeat obfuscated prompt injections while preserving native Russian semantics.
+- **Hierarchical Two-Tier Defense Architecture:** Validated Tier-1 fast-path evaluation executing in **$1,831.0\text{ ns/op}$ ($1.83\,\mu\text{s}$)** (~546,000 inspections/sec) and asynchronous Tier-2 deep verification for borderline transactions.
+- **Zero-FPR Business Preservation:** Verified legitimate multi-currency international business requests (e.g., Moscow branch refund requests, Beijing FX conversions, Madrid operations) with **0.00% False Positive Rate**.
+
+### 9. Phase 13: Zero-Dependency Embedded Raft Consensus Mesh (`RAFT-001..050` - 50 Scenarios)
+- **Pure-Go Raft Consensus State Machine:** Replicated log entries (`CONSUME_NONCE`, `RECORD_VELOCITY`, `FLEET_FREEZE`, `CLUSTER_RESET`) across nodes in **$512.9\text{ ns/op}$ ($0.51\,\mu\text{s}$)** with **0 memory allocations**.
+- **Cross-Pod Distributed Anti-Smurfing:** Verified cluster-wide sliding-window velocity checks without external Redis dependencies, blocking distributed structuring bursts ($> \$25,000$) across nodes at the wire.
+- **Single-Use Replay Nonce Interception:** Verified that a nonce committed on Node 1 is immediately and deterministically rejected as consumed when presented to Node 2 or Node 3.
+- **Quorum-Enforced Fleet Freeze & Partition Resilience:** Simulated split-brain network partitioning; verified that minority partitions fail closed while the majority quorum maintains authoritative cluster defense.
+
 ---
 
 ## 📈 Apple M5 Complete Silicon Micro-Benchmark Telemetry
@@ -319,20 +337,30 @@ Empirically verified on Apple M5 hardware with sub-nanosecond hardware counters:
 
 | Subsystem / Benchmark Function | Phase | Tested Speed (ns/op) | Tested Speed (µs/op) | Memory Allocations | Real-World Operational Throughput |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `BenchmarkTenantRegistry_Authenticate` | Phase 7 | **171.5 ns/op** | **0.17 µs** | 285 B/op (4 allocs) | **5,830,903 authentications / sec** |
-| `BenchmarkInProcessPolicyEngine_Evaluate` | Phase 4.1 | **214.9 ns/op** | **0.21 µs** | 168 B/op (6 allocs) | **4,653,327 evaluations / sec** |
-| `BenchmarkSIEM_FormatCEF` | Phase 9 | **284.8 ns/op** | **0.28 µs** | 408 B/op (9 allocs) | **3,511,236 CEF events / sec** |
-| `BenchmarkOfflineMerkleInclusion_Verify` | Phase 8 | **497.0 ns/op** | **0.50 µs** | 1,152 B/op (16 allocs) | **2,012,072 proof verifications / sec** |
-| `BenchmarkZeroLossAuditWAL_WriteSync` | Phase 3.5 | **628.5 ns/op** | **0.63 µs** | 707 B/op (15 allocs) | **1,591,089 pre-commits / sec** |
-| `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **654.8 ns/op** | **0.65 µs** | 926 B/op (17 allocs) | **1,527,183 partition blocks / sec** |
-| `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,439.0 ns/op** | **2.44 µs** | 5,432 B/op (76 allocs) | **410,004 epoch roots / sec** |
-| `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,527.0 ns/op** | **3.53 µs** | 3,688 B/op (79 allocs) | **283,527 MCP messages / sec** |
-| `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,616.0 ns/op** | **5.62 µs** | 560 B/op (5 allocs) | **178,062 classifications / sec** |
-| `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **30,698.0 ns/op** | **30.70 µs** | 2,265 B/op (18 allocs) | **32,575 deep inspections / sec** |
+| `BenchmarkTenantRegistry_Authenticate` | Phase 7 | **178.9 ns/op** | **0.18 µs** | 285 B/op (4 allocs) | **5,590,000 authentications / sec** |
+| `BenchmarkInProcessPolicyEngine_Evaluate` | Phase 4.1 | **217.5 ns/op** | **0.22 µs** | 168 B/op (6 allocs) | **4,600,000 evaluations / sec** |
+| `BenchmarkSPL_Evaluate` | Phase 11 | **222.1 ns/op** | **0.22 µs** | 304 B/op (12 allocs) | **4,502,476 evaluations / sec** |
+| `BenchmarkSIEM_FormatCEF` | Phase 9 | **284.2 ns/op** | **0.28 µs** | 408 B/op (9 allocs) | **3,518,648 CEF events / sec** |
+| `BenchmarkOfflineMerkleInclusion_Verify` | Phase 8 | **497.1 ns/op** | **0.50 µs** | 1,152 B/op (16 allocs) | **2,011,667 proof verifications / sec** |
+| `BenchmarkEmbeddedRaft_Propose` | Phase 13 | **512.9 ns/op** | **0.51 µs** | 0 B/op (0 allocs) | **1,949,697 commits / sec** |
+| `BenchmarkZeroLossAuditWAL_WriteSync` | Phase 3.5 | **618.8 ns/op** | **0.62 µs** | 707 B/op (15 allocs) | **1,616,031 pre-commits / sec** |
+| `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **656.2 ns/op** | **0.66 µs** | 926 B/op (17 allocs) | **1,523,925 partition blocks / sec** |
+| `BenchmarkMultilingualGuard_Inspect` | Phase 12 | **1,831.0 ns/op** | **1.83 µs** | 600 B/op (8 allocs) | **546,149 inspections / sec** |
+| `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,598.0 ns/op** | **2.60 µs** | 5,432 B/op (76 allocs) | **384,911 epoch roots / sec** |
+| `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,605.0 ns/op** | **3.61 µs** | 3,688 B/op (79 allocs) | **277,392 MCP messages / sec** |
+| `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,450.0 ns/op** | **5.45 µs** | 560 B/op (5 allocs) | **183,486 classifications / sec** |
+| `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **31,435.0 ns/op** | **31.44 µs** | 2,265 B/op (18 allocs) | **31,811 deep inspections / sec** |
 
 ---
 
 ## 🛠️ How to Reproduce All Benchmarks
+
+To execute the Phase 11 to 13 Enterprise Harsh Benchmark (150 scenarios):
+
+```bash
+cd /Users/personal/Desktop/sentinel/gateway
+go test -v -run TestPhase11To13EnterpriseBenchmark
+```
 
 To execute the Phase 5 to 10 Enterprise Harsh Benchmark (205 scenarios):
 
@@ -397,7 +425,7 @@ cd /Users/personal/Desktop/sentinel/gateway
 go test -v -run TestRealityCheckBenchmark
 ```
 
-To run the full Sentinel Gateway test suite (all 884 total automated assertions):
+To run the full Sentinel Gateway test suite (all 1,034 total automated assertions):
 
 ```bash
 cd /Users/personal/Desktop/sentinel/gateway
