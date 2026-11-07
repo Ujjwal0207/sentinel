@@ -812,6 +812,9 @@ func main() {
 	// 2. Set up HTTP Handlers
 	http.HandleFunc("/enforce", enforceHandler)
 	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/v1/chat/completions", OpenAIProxyHandler)
+	http.HandleFunc("/mcp", MCPProxyHandler)
+	http.HandleFunc("/mcp/v1", MCPProxyHandler)
 
 	// 3. Start Server
 	port := ":8080"
