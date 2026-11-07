@@ -3,6 +3,7 @@ import logging
 import hashlib
 import time
 import psycopg2
+import psycopg2.pool
 from confluent_kafka import Consumer, KafkaError
 from datetime import datetime
 
@@ -22,7 +23,33 @@ except ImportError:
     KAFKA_BOOTSTRAP = os.getenv("SENTINEL_KAFKA_BOOTSTRAP", "localhost:9092")
     KAFKA_TOPIC = os.getenv("SENTINEL_KAFKA_TOPIC", "sentinel-audit-events")
 
+_db_pool = None
+
+def get_db_pool():
+    global _db_pool
+    if _db_pool is None or _db_pool.closed:
+        try:
+            _db_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=25,
+                host=DB_HOST,
+                port=DB_PORT,
+                database=DB_NAME,
+                user=DB_USER,
+                password=DB_PASS
+            )
+        except Exception as e:
+            logging.warning(f"Could not initialize audit connection pool: {e}")
+            _db_pool = None
+    return _db_pool
+
 def get_db_connection():
+    pool = get_db_pool()
+    if pool:
+        try:
+            return pool.getconn()
+        except Exception:
+            pass
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -30,6 +57,16 @@ def get_db_connection():
         user=DB_USER,
         password=DB_PASS
     )
+
+def release_db_connection(conn):
+    if conn:
+        try:
+            if _db_pool and not _db_pool.closed:
+                _db_pool.putconn(conn)
+                return
+            conn.close()
+        except Exception:
+            pass
 
 def setup_database():
     """Ensure the audit_logs table exists."""
@@ -62,10 +99,7 @@ def setup_database():
         logging.info("Database setup complete.")
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 def get_latest_hash(max_retries=3):
     """Fetch the hash of the most recent audit log to link the chain."""
@@ -86,10 +120,7 @@ def get_latest_hash(max_retries=3):
                 raise
         finally:
             if conn:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                release_db_connection(conn)
 
 def parse_origin_timestamp(event_data: dict) -> datetime:
     """
@@ -128,10 +159,7 @@ def insert_audit_log(timestamp_val, agent_id, action, payload, decision, prev_ha
         cursor.close()
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 def verify_chain_integrity() -> dict:
     """
@@ -199,10 +227,7 @@ def verify_chain_integrity() -> dict:
         return {"status": "ERROR", "error": str(e), "tampered": None}
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 def consume_audit_logs():
     """
