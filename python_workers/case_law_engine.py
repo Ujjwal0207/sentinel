@@ -1,5 +1,6 @@
 import logging
 import psycopg2
+import psycopg2.pool
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +38,33 @@ except ImportError:
     API_HOST = os.getenv("SENTINEL_API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("SENTINEL_API_PORT", "8000"))
 
+_db_pool = None
+
+def get_db_pool():
+    global _db_pool
+    if _db_pool is None or _db_pool.closed:
+        try:
+            _db_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=25,
+                host=DB_HOST,
+                port=DB_PORT,
+                database=DB_NAME,
+                user=DB_USER,
+                password=DB_PASS
+            )
+        except Exception as e:
+            logging.warning(f"Could not initialize connection pool: {e}")
+            _db_pool = None
+    return _db_pool
+
 def get_db_connection():
+    pool = get_db_pool()
+    if pool:
+        try:
+            return pool.getconn()
+        except Exception:
+            pass
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -45,6 +72,16 @@ def get_db_connection():
         user=DB_USER,
         password=DB_PASS
     )
+
+def release_db_connection(conn):
+    if conn:
+        try:
+            if _db_pool and not _db_pool.closed:
+                _db_pool.putconn(conn)
+                return
+            conn.close()
+        except Exception:
+            pass
 
 def ensure_audit_table():
     """
@@ -75,10 +112,7 @@ def ensure_audit_table():
         logging.warning(f"Could not auto-initialize audit_logs table: {e}")
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 # --- Feature Engineering ---
 # High-Dimensional Vectorization Engine (Sentinel Hardened Guardrails)
@@ -373,10 +407,7 @@ def load_precedents():
         logging.error(f"Failed to load precedents: {e}")
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 # Load precedents on startup, ensuring table exists first
 @app.on_event("startup")
@@ -623,10 +654,7 @@ def get_logs():
         raise HTTPException(status_code=500, detail="Database connection failed")
     finally:
         if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            release_db_connection(conn)
 
 @app.get("/api/verify-audit-chain")
 def verify_audit_chain():
