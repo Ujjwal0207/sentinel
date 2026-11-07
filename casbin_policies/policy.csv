@@ -1,9 +1,14 @@
 # Define roles and their permitted actions
 p, refund_tier, Issue_Refund, execute
 p, refund_tier, REFUND, execute
+p, refund_tier, ISSUE_REFUND, execute
 p, credit_tier, Credit_Increase, execute
+p, credit_tier, CREDIT_INCREASE, execute
 p, general_tier, TRANSFER, execute
+p, general_tier, WITHDRAW, execute
+p, general_tier, LOGIN, execute
 p, fraud_tier, Lock_Card, execute
+p, fraud_tier, LOCK_CARD, execute
 p, query_tier, QUERY_DATABASE, execute
 
 # Map specific agents to roles
@@ -23,3 +28,7 @@ g, ag_Admin, query_tier
 g, ag_Support_Bot, refund_tier
 g, ag_Scraper, query_tier
 g, ag_Intern_Bot, refund_tier
+g, ag_Finance_Bot, refund_tier
+g, ag_Finance_Bot, general_tier
+g, ag_Finance_Bot, credit_tier
+g, ag_Finance_Bot, fraud_tier
