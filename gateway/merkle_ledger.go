@@ -328,5 +328,30 @@ func (mpl *MultiPartitionLedger) Reset() {
 	mpl.latestEpochID = 0
 }
 
+// GetPartitionHeads returns the latest hash for each partition
+func (mpl *MultiPartitionLedger) GetPartitionHeads() map[int]string {
+	mpl.mu.RLock()
+	defer mpl.mu.RUnlock()
+
+	heads := make(map[int]string, len(mpl.partitions))
+	for id, p := range mpl.partitions {
+		p.mu.Lock()
+		heads[id] = p.latestHash
+		p.mu.Unlock()
+	}
+	return heads
+}
+
+// GetLatestEpochRoot returns the latest finalized epoch root
+func (mpl *MultiPartitionLedger) GetLatestEpochRoot() string {
+	mpl.mu.RLock()
+	defer mpl.mu.RUnlock()
+
+	if len(mpl.epochs) == 0 {
+		return ""
+	}
+	return mpl.epochs[len(mpl.epochs)-1].MerkleRoot
+}
+
 // Global Multi-Partition Merkle Ledger instance
 var globalMerkleLedger = NewMultiPartitionLedger(16)
