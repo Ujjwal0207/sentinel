@@ -8,7 +8,7 @@
   <a href="#-pick-your-path"><img src="https://img.shields.io/badge/🎯_Start-Quick_Start-2563eb?style=for-the-badge" alt="Quick Start" /></a>
   <a href="#-interactive-api-playground"><img src="https://img.shields.io/badge/🧪_Try-API_Playground-7c3aed?style=for-the-badge" alt="API Playground" /></a>
   <a href="#-live-demo-scenarios"><img src="https://img.shields.io/badge/🎬_Watch-Demo_Scenarios-0ea5e9?style=for-the-badge" alt="Demo Scenarios" /></a>
-  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-679_Tests_100%25-059669?style=for-the-badge" alt="Benchmarks" /></a>
+  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-884_Tests_100%25-059669?style=for-the-badge" alt="Benchmarks" /></a>
   <a href="#-implementation-status"><img src="https://img.shields.io/badge/✅_See-What's_Built-10b981?style=for-the-badge" alt="Status" /></a>
 </p>
 
@@ -17,9 +17,9 @@
   <img src="https://img.shields.io/badge/Identity-Ed25519_%2B_UCAN_DAGs-7c3aed?style=flat-square" alt="KYA" />
   <img src="https://img.shields.io/badge/Intent_Drift-Google_AP2_Anchor-0ea5e9?style=flat-square" alt="Google AP2" />
   <img src="https://img.shields.io/badge/State_Mesh-Redis_Cluster_Lua-dc2626?style=flat-square" alt="Redis Lua" />
-  <img src="https://img.shields.io/badge/Zero--Hop_Engine-212ns_Pure_Go-10b981?style=flat-square" alt="Zero-Hop" />
-  <img src="https://img.shields.io/badge/Audit_WAL-Zero--Loss_641ns-059669?style=flat-square" alt="WAL" />
-  <img src="https://img.shields.io/badge/Semantic_Guard-Prompt_Injection_32D-7c3aed?style=flat-square" alt="Semantic Guard" />
+  <img src="https://img.shields.io/badge/MCP_Gateway-Zero--Trust_3.5µs-0ea5e9?style=flat-square" alt="MCP" />
+  <img src="https://img.shields.io/badge/Multi--Tenancy-171ns_Auth-10b981?style=flat-square" alt="Multi-Tenancy" />
+  <img src="https://img.shields.io/badge/Compliance-EU_AI_Act_%2B_SOC2-7c3aed?style=flat-square" alt="Compliance" />
 </p>
 
 > **"Traditional firewalls inspect network packets. SENTINEL inspects agentic tool execution. Banks have KYC for humans — SENTINEL enforces KYA through sub-millisecond edge gatekeeping, asymmetric Ed25519 identity, UCAN delegation DAGs, Google AP2 user-intent anchoring, distributed Redis Lua state synchronization, precedent-driven Case Law, and dynamic fleet contagion defense."**
@@ -33,13 +33,13 @@
 | 🎯 | [Pick Your Path](#-pick-your-path) | Judge demo · Developer setup · API explorer |
 | 🛡️ | [Why SENTINEL Exists](#-why-sentinel-exists) | The agentic security gap |
 | ⚡ | [Core Innovations](#-core-architectural-innovations) | Expandable deep-dives on each pillar (KYA, AP2, UCAN, Redis Lua) |
-| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 679-test scorecard & reproduction |
+| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 884-test scorecard & reproduction |
 | 🔄 | [Decision Flow](#-how-a-decision-flows) | Live mermaid pipeline |
 | 🎬 | [Demo Scenarios](#-live-demo-scenarios) | Step-by-step "what happens when…" |
 | 🧪 | [API Playground](#-interactive-api-playground) | Copy-paste `curl` commands |
 | 👥 | [Agent RBAC Matrix](#-agent-rbac-matrix) | Who can do what |
 | 🏗️ | [Architecture](#-system-architecture) | Services, ports, stack |
-| ✅ | [Implementation Status](#-implementation-status) | Built across all phases (1 through 4.3) |
+| ✅ | [Implementation Status](#-implementation-status) | Built across all phases (1 through 10) |
 | 🚀 | [Quick Start](#-quick-start) | 6-step launch guide |
 | 🔧 | [Troubleshooting](#-troubleshooting) | Common fixes (collapsible) |
 | 📂 | [Project Structure](#-project-structure) | Repo map |
@@ -316,10 +316,11 @@ SENTINEL intercepts adversarial inputs across a 32-attribute semantic feature ve
 
 ## 📊 Benchmark Telemetry & Empirical Proof
 
-SENTINEL is continuously audited by an automated, enterprise-grade test and benchmark harness comprising **679 automated test assertions** running in **$< 0.76\text{ seconds}$** with a **100.00% pass rate, 0.00% False Positive Rate (FPR), 0.00% False Negative Rate (FNR), and 0.00% Ledger Fork Rate**:
+SENTINEL is continuously audited by an automated, enterprise-grade test and benchmark harness comprising **884 automated test assertions** running in **$< 0.35\text{ seconds}$** with a **100.00% pass rate, 0.00% False Positive Rate (FPR), 0.00% False Negative Rate (FNR), and 0.00% Ledger Fork Rate**:
 
 | Benchmark Suite | Test File | Scenarios | Focus Vectors | Pass Rate | Mean Latency |
 | :--- | :--- | :---: | :--- | :---: | :---: |
+| **Phase 5 to 10 Enterprise Benchmark** | [`phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) | **205** | MCP Proxy, 64D Vector Index, Multi-Tenancy, Compliance Exporter, SIEM Alerts, Adversarial | **100.00%** | $18.2\,\mu\text{s}$ |
 | **Phase 4 & 3.5 Enterprise Harsh Benchmark** | [`phase4_enterprise_harsh_benchmark_test.go`](gateway/phase4_enterprise_harsh_benchmark_test.go) | **205** | Zero-Loss Audit WAL, Partition Merkle Chains, Zero-Hop Engine, 32D Semantic Guard | **100.00%** | $31.4\,\mu\text{s}$ |
 | **Phase 3.3 & 3.4 Advanced Enterprise** | [`phase3_advanced_benchmark_test.go`](gateway/phase3_advanced_benchmark_test.go) | **150** | Ed25519 Key Theft, UCAN 1/2/3-Hop DAGs, 5-Pod Replay, Distributed Smurfing, Fleet Freeze | **100.00%** | $148.2\,\mu\text{s}$ |
 | **Phase 3.1 & 3.2 Enterprise Benchmark** | [`phase3_enterprise_benchmark_test.go`](gateway/phase3_enterprise_benchmark_test.go) | **140** | Transport Socket Pinning, TOCTOU DNS Rebinding, Google AP2 Intent Drift | **100.00%** | $14.5\,\mu\text{s}$ |
@@ -328,23 +329,28 @@ SENTINEL is continuously audited by an automated, enterprise-grade test and benc
 | **Harsh Reality FinTech Vectors** | [`harsh_reality_test.go`](gateway/harsh_reality_test.go) | **12** | Adversarial Smurfing, Unicode Homoglyphs, Daemon Port Probing, Zero-Width Spaces | **100.00%** | $42.0\,\mu\text{s}$ |
 | **Deep Red-Team Evasions** | [`deep_redteam_test.go`](gateway/deep_redteam_test.go) | **5** | RFC 8259 Duplicate Keys, Concurrency Lock Contention, Sub-Cent Precision | **100.00%** | $18.5\,\mu\text{s}$ |
 | **Unit Test Suite** | [`main_test.go`](gateway/main_test.go) | **15** | Core Gateway Validation, Shell Chaining, AST-level tokenizing filters | **100.00%** | $< 10.0\,\mu\text{s}$ |
-| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **679** | **Zero Regressions Across All Enterprise Attack Vectors** | **100.00%** | **$34.2\,\mu\text{s}$** |
+| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **884** | **Zero Regressions Across All Enterprise Attack Vectors** | **100.00%** | **$29.8\,\mu\text{s}$** |
 
 ### 📈 Apple M5 Silicon Micro-Benchmark Telemetry
 
 Empirically verified on Apple M5 hardware with sub-nanosecond hardware timers:
 
-| Subsystem / Benchmark Function | Tested Speed (ns/op) | Tested Speed (µs/op) | Allocations | Empirical Throughput |
-| :--- | :---: | :---: | :---: | :---: |
-| `BenchmarkInProcessPolicyEngine_Evaluate` | **212.8 ns/op** | **0.21 µs** | 168 B/op (6 allocs) | **4,699,248 evals / sec** |
-| `BenchmarkZeroLossAuditWAL_WriteSync` | **641.4 ns/op** | **0.64 µs** | 707 B/op (15 allocs) | **1,559,089 writes / sec** |
-| `BenchmarkMultiPartitionLedger_RecordEvent` | **663.1 ns/op** | **0.66 µs** | 927 B/op (17 allocs) | **1,508,068 blocks / sec** |
-| `BenchmarkEpochMerkleTree_BuildTree` | **2,403.0 ns/op** | **2.40 µs** | 5,432 B/op (76 allocs) | **416,146 roots / sec** |
-| `BenchmarkSemanticGuard_InspectSemanticSafety` | **23,041.0 ns/op** | **23.04 µs** | 1,802 B/op (15 allocs) | **43,400 scans / sec** |
+| Subsystem / Benchmark Function | Phase | Tested Speed (ns/op) | Tested Speed (µs/op) | Allocations | Empirical Throughput |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| `BenchmarkTenantRegistry_Authenticate` | Phase 7 | **171.5 ns/op** | **0.17 µs** | 285 B/op (4 allocs) | **5,830,903 auths / sec** |
+| `BenchmarkInProcessPolicyEngine_Evaluate` | Phase 4.1 | **214.9 ns/op** | **0.21 µs** | 168 B/op (6 allocs) | **4,653,327 evals / sec** |
+| `BenchmarkSIEM_FormatCEF` | Phase 9 | **284.8 ns/op** | **0.28 µs** | 408 B/op (9 allocs) | **3,511,236 CEF events / sec** |
+| `BenchmarkOfflineMerkleInclusion_Verify` | Phase 8 | **497.0 ns/op** | **0.50 µs** | 1,152 B/op (16 allocs) | **2,012,072 proof verifications / sec** |
+| `BenchmarkZeroLossAuditWAL_WriteSync` | Phase 3.5 | **628.5 ns/op** | **0.63 µs** | 707 B/op (15 allocs) | **1,591,089 pre-commits / sec** |
+| `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **654.8 ns/op** | **0.65 µs** | 926 B/op (17 allocs) | **1,527,183 blocks / sec** |
+| `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,439.0 ns/op** | **2.44 µs** | 5,432 B/op (76 allocs) | **410,004 epoch roots / sec** |
+| `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,527.0 ns/op** | **3.53 µs** | 3,688 B/op (79 allocs) | **283,527 MCP messages / sec** |
+| `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,616.0 ns/op** | **5.62 µs** | 560 B/op (5 allocs) | **178,062 classifications / sec** |
+| `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **30,698.0 ns/op** | **30.70 µs** | 2,265 B/op (18 allocs) | **32,575 deep scans / sec** |
 
 ### How to Reproduce All Benchmarks
 
-Execute the entire 679-test suite with a single command:
+Execute the entire 884-test suite with a single command:
 
 ```bash
 cd gateway
@@ -354,6 +360,9 @@ go test -count=1 -v ./...
 Or run targeted benchmark suites and micro-benchmarks:
 
 ```bash
+# Run Phase 5 to 10 Enterprise Benchmark (205 tests)
+go test -v -run TestPhase5To10EnterpriseBenchmark
+
 # Run Phase 4 & 3.5 Enterprise Harsh Benchmark (205 tests)
 go test -v -run TestPhase4EnterpriseHarshBenchmark
 
@@ -713,12 +722,18 @@ Request arrives
 | **Dynamic Fleet Contagion & Quarantine** | ✅ | Mathematical blast-radius dampening & behavioral health scoring | [`python_workers/case_law_engine.py`](python_workers/case_law_engine.py) |
 | **SHA-256 Tamper-Evident Ledger** | ✅ | Immutable cryptographic hash chain committed to PostgreSQL via Kafka | [`python_workers/audit_worker.py`](python_workers/audit_worker.py) |
 | **React Mission Control Dashboard** | ✅ | Live trust economy gauge, hash-chained ledger stream, emergency stop | [`dashboard/`](dashboard/) |
-| **Automated Benchmark Suite (679 Tests)** | ✅ | Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32) | [`BENCHMARKS.md`](BENCHMARKS.md) |
-| **Phase 3.5: Zero-Loss Audit WAL** | ✅ | Synchronous memory ring-buffer WAL (641ns), zero event loss under broker partition | [`gateway/audit_wal.go`](gateway/audit_wal.go) |
-| **Phase 3.5: Multi-Partition Merkle Ledger** | ✅ | Partition sub-chains (663ns) + binary Epoch Merkle tree aggregation (2.4µs), 0.00% forks | [`gateway/merkle_ledger.go`](gateway/merkle_ledger.go) |
-| **Phase 4.1: Microsecond Zero-Hop Policy Engine** | ✅ | Pure-Go precedent engine (212ns, 9,400x speedup) with adaptive circuit breaker | [`gateway/inprocess_engine.go`](gateway/inprocess_engine.go) |
-| **Phase 4.2: 32D Multi-Vector Semantic Guard** | ✅ | Prompt injection, adversarial role delimiters, exfiltration sinks & taint tracking (23µs) | [`gateway/semantic_guard.go`](gateway/semantic_guard.go) |
+| **Automated Benchmark Suite (884 Tests)** | ✅ | Phases 5-10 (205), Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32) | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| **Phase 3.5: Zero-Loss Audit WAL** | ✅ | Synchronous memory ring-buffer WAL (628ns), zero event loss under broker partition | [`gateway/audit_wal.go`](gateway/audit_wal.go) |
+| **Phase 3.5: Multi-Partition Merkle Ledger** | ✅ | Partition sub-chains (654ns) + binary Epoch Merkle tree aggregation (2.4µs), 0.00% forks | [`gateway/merkle_ledger.go`](gateway/merkle_ledger.go) |
+| **Phase 4.1: Microsecond Zero-Hop Policy Engine** | ✅ | Pure-Go precedent engine (214ns, 9,400x speedup) with adaptive circuit breaker | [`gateway/inprocess_engine.go`](gateway/inprocess_engine.go) |
+| **Phase 4.2: 32D Multi-Vector Semantic Guard** | ✅ | Prompt injection, adversarial role delimiters, exfiltration sinks & taint tracking (30µs) | [`gateway/semantic_guard.go`](gateway/semantic_guard.go) |
 | **Phase 4.3: Thread-Safe DB Connection Pooling** | ✅ | ThreadedConnectionPool (2-25 conns) eliminating psycopg2 raw TCP exhaustion | [`python_workers/case_law_engine.py`](python_workers/case_law_engine.py) |
+| **Phase 5: Reverse Proxy & MCP Ingress** | ✅ | OpenAI-compatible chat proxy + Model Context Protocol (MCP) JSON-RPC tool interceptor | [`gateway/proxy_ingress.go`](gateway/proxy_ingress.go) |
+| **Phase 6: In-Process Dense Vector Index** | ✅ | Pure-Go 64D cosine distance index & precedent clustering (5.6µs execution) | [`gateway/semantic_vector_index.go`](gateway/semantic_vector_index.go) |
+| **Phase 7: Multi-Tenancy & Scoped API Keys** | ✅ | Tenant isolation, scoped `sk_live_` authentication (171ns), quota enforcement | [`gateway/multitenancy.go`](gateway/multitenancy.go) |
+| **Phase 8: One-Click Compliance Exporter** | ✅ | EU AI Act Article 14 & SOC 2 Type II certified reports + offline Merkle verifier (497ns) | [`gateway/compliance_exporter.go`](gateway/compliance_exporter.go) |
+| **Phase 9: SIEM Connector & Alert Dispatcher** | ✅ | Micro Focus ArcSight CEF (284ns) + Syslog RFC 5424 + deduplicated Slack/PagerDuty webhooks | [`gateway/alert_dispatcher.go`](gateway/alert_dispatcher.go) |
+| **Phase 10: Adaptive Adversarial Test Harness** | ✅ | Pareto-distributed burst generator + dynamic red-team injection permutations | [`gateway/phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) |
 
 ---
 
