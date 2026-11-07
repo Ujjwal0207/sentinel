@@ -236,6 +236,14 @@ func NewInProcessPolicyEngine() *InProcessPolicyEngine {
 		RequiresMandate:   false,
 		DefaultDecision:   "ALLOW",
 	}
+	engine.rules["QUERY"] = PrecedentRule{
+		Action:            "QUERY",
+		MaxAmount:         0.0,
+		AllowedCurrencies: []string{},
+		RiskWeight:        0.1,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
 
 	return engine
 }
@@ -352,6 +360,27 @@ func (ipe *InProcessPolicyEngine) Evaluate(ctx context.Context, agentID, action 
 		LatencyNs:  elapsed,
 		InProcess:  true,
 		Citations:  []string{fmt.Sprintf("PRECEDENT_%s_BASELINE", actionUpper)},
+	}
+}
+
+// GetQuarantinedAgents returns a list of agent IDs currently under quarantine
+func (ipe *InProcessPolicyEngine) GetQuarantinedAgents() []string {
+	ipe.mu.RLock()
+	defer ipe.mu.RUnlock()
+
+	var quarantined []string
+	for agentID, score := range ipe.trustBudget {
+		if score <= 0.20 {
+			quarantined = append(quarantined, agentID)
+		}
+	}
+	return quarantined
+}
+
+// ResetCircuitBreaker resets the internal circuit breaker to closed state
+func (ipe *InProcessPolicyEngine) ResetCircuitBreaker() {
+	if ipe.cb != nil {
+		ipe.cb.Reset()
 	}
 }
 
