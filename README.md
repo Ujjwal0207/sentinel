@@ -8,7 +8,7 @@
   <a href="#-pick-your-path"><img src="https://img.shields.io/badge/🎯_Start-Quick_Start-2563eb?style=for-the-badge" alt="Quick Start" /></a>
   <a href="#-interactive-api-playground"><img src="https://img.shields.io/badge/🧪_Try-API_Playground-7c3aed?style=for-the-badge" alt="API Playground" /></a>
   <a href="#-live-demo-scenarios"><img src="https://img.shields.io/badge/🎬_Watch-Demo_Scenarios-0ea5e9?style=for-the-badge" alt="Demo Scenarios" /></a>
-  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-884_Tests_100%25-059669?style=for-the-badge" alt="Benchmarks" /></a>
+  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,034_Tests_100%25-059669?style=for-the-badge" alt="Benchmarks" /></a>
   <a href="#-implementation-status"><img src="https://img.shields.io/badge/✅_See-What's_Built-10b981?style=for-the-badge" alt="Status" /></a>
 </p>
 
@@ -33,13 +33,13 @@
 | 🎯 | [Pick Your Path](#-pick-your-path) | Judge demo · Developer setup · API explorer |
 | 🛡️ | [Why SENTINEL Exists](#-why-sentinel-exists) | The agentic security gap |
 | ⚡ | [Core Innovations](#-core-architectural-innovations) | Expandable deep-dives on each pillar (KYA, AP2, UCAN, Redis Lua) |
-| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 884-test scorecard & reproduction |
+| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 1,034-test scorecard & reproduction |
 | 🔄 | [Decision Flow](#-how-a-decision-flows) | Live mermaid pipeline |
 | 🎬 | [Demo Scenarios](#-live-demo-scenarios) | Step-by-step "what happens when…" |
 | 🧪 | [API Playground](#-interactive-api-playground) | Copy-paste `curl` commands |
 | 👥 | [Agent RBAC Matrix](#-agent-rbac-matrix) | Who can do what |
 | 🏗️ | [Architecture](#-system-architecture) | Services, ports, stack |
-| ✅ | [Implementation Status](#-implementation-status) | Built across all phases (1 through 10) |
+| ✅ | [Implementation Status](#-implementation-status) | Built across all phases (1 through 13) |
 | 🚀 | [Quick Start](#-quick-start) | 6-step launch guide |
 | 🔧 | [Troubleshooting](#-troubleshooting) | Common fixes (collapsible) |
 | 📂 | [Project Structure](#-project-structure) | Repo map |
@@ -316,10 +316,11 @@ SENTINEL intercepts adversarial inputs across a 32-attribute semantic feature ve
 
 ## 📊 Benchmark Telemetry & Empirical Proof
 
-SENTINEL is continuously audited by an automated, enterprise-grade test and benchmark harness comprising **884 automated test assertions** running in **$< 0.35\text{ seconds}$** with a **100.00% pass rate, 0.00% False Positive Rate (FPR), 0.00% False Negative Rate (FNR), and 0.00% Ledger Fork Rate**:
+SENTINEL is continuously audited by an automated, enterprise-grade test and benchmark harness comprising **1,034 automated test assertions** running in **$< 0.30\text{ seconds}$** with a **100.00% pass rate, 0.00% False Positive Rate (FPR), 0.00% False Negative Rate (FNR), and 0.00% Ledger Fork Rate**:
 
 | Benchmark Suite | Test File | Scenarios | Focus Vectors | Pass Rate | Mean Latency |
 | :--- | :--- | :---: | :--- | :---: | :---: |
+| **Phase 11 to 13 Enterprise Benchmark** | [`phase11_to_13_enterprise_benchmark_test.go`](gateway/phase11_to_13_enterprise_benchmark_test.go) | **150** | SPL Policy Parser, Multilingual Semantic Guard, Zero-Dependency Raft Mesh | **100.00%** | $12.4\,\mu\text{s}$ |
 | **Phase 5 to 10 Enterprise Benchmark** | [`phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) | **205** | MCP Proxy, 64D Vector Index, Multi-Tenancy, Compliance Exporter, SIEM Alerts, Adversarial | **100.00%** | $18.2\,\mu\text{s}$ |
 | **Phase 4 & 3.5 Enterprise Harsh Benchmark** | [`phase4_enterprise_harsh_benchmark_test.go`](gateway/phase4_enterprise_harsh_benchmark_test.go) | **205** | Zero-Loss Audit WAL, Partition Merkle Chains, Zero-Hop Engine, 32D Semantic Guard | **100.00%** | $31.4\,\mu\text{s}$ |
 | **Phase 3.3 & 3.4 Advanced Enterprise** | [`phase3_advanced_benchmark_test.go`](gateway/phase3_advanced_benchmark_test.go) | **150** | Ed25519 Key Theft, UCAN 1/2/3-Hop DAGs, 5-Pod Replay, Distributed Smurfing, Fleet Freeze | **100.00%** | $148.2\,\mu\text{s}$ |
@@ -329,7 +330,7 @@ SENTINEL is continuously audited by an automated, enterprise-grade test and benc
 | **Harsh Reality FinTech Vectors** | [`harsh_reality_test.go`](gateway/harsh_reality_test.go) | **12** | Adversarial Smurfing, Unicode Homoglyphs, Daemon Port Probing, Zero-Width Spaces | **100.00%** | $42.0\,\mu\text{s}$ |
 | **Deep Red-Team Evasions** | [`deep_redteam_test.go`](gateway/deep_redteam_test.go) | **5** | RFC 8259 Duplicate Keys, Concurrency Lock Contention, Sub-Cent Precision | **100.00%** | $18.5\,\mu\text{s}$ |
 | **Unit Test Suite** | [`main_test.go`](gateway/main_test.go) | **15** | Core Gateway Validation, Shell Chaining, AST-level tokenizing filters | **100.00%** | $< 10.0\,\mu\text{s}$ |
-| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **884** | **Zero Regressions Across All Enterprise Attack Vectors** | **100.00%** | **$29.8\,\mu\text{s}$** |
+| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **1,034** | **Zero Regressions Across All Enterprise Attack Vectors** | **100.00%** | **$26.4\,\mu\text{s}$** |
 
 ### 📈 Apple M5 Silicon Micro-Benchmark Telemetry
 
@@ -337,20 +338,23 @@ Empirically verified on Apple M5 hardware with sub-nanosecond hardware timers:
 
 | Subsystem / Benchmark Function | Phase | Tested Speed (ns/op) | Tested Speed (µs/op) | Allocations | Empirical Throughput |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `BenchmarkTenantRegistry_Authenticate` | Phase 7 | **171.5 ns/op** | **0.17 µs** | 285 B/op (4 allocs) | **5,830,903 auths / sec** |
-| `BenchmarkInProcessPolicyEngine_Evaluate` | Phase 4.1 | **214.9 ns/op** | **0.21 µs** | 168 B/op (6 allocs) | **4,653,327 evals / sec** |
-| `BenchmarkSIEM_FormatCEF` | Phase 9 | **284.8 ns/op** | **0.28 µs** | 408 B/op (9 allocs) | **3,511,236 CEF events / sec** |
-| `BenchmarkOfflineMerkleInclusion_Verify` | Phase 8 | **497.0 ns/op** | **0.50 µs** | 1,152 B/op (16 allocs) | **2,012,072 proof verifications / sec** |
-| `BenchmarkZeroLossAuditWAL_WriteSync` | Phase 3.5 | **628.5 ns/op** | **0.63 µs** | 707 B/op (15 allocs) | **1,591,089 pre-commits / sec** |
-| `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **654.8 ns/op** | **0.65 µs** | 926 B/op (17 allocs) | **1,527,183 blocks / sec** |
-| `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,439.0 ns/op** | **2.44 µs** | 5,432 B/op (76 allocs) | **410,004 epoch roots / sec** |
-| `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,527.0 ns/op** | **3.53 µs** | 3,688 B/op (79 allocs) | **283,527 MCP messages / sec** |
-| `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,616.0 ns/op** | **5.62 µs** | 560 B/op (5 allocs) | **178,062 classifications / sec** |
-| `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **30,698.0 ns/op** | **30.70 µs** | 2,265 B/op (18 allocs) | **32,575 deep scans / sec** |
+| `BenchmarkTenantRegistry_Authenticate` | Phase 7 | **178.9 ns/op** | **0.18 µs** | 285 B/op (4 allocs) | **5,590,000 auths / sec** |
+| `BenchmarkInProcessPolicyEngine_Evaluate` | Phase 4.1 | **217.5 ns/op** | **0.22 µs** | 168 B/op (6 allocs) | **4,600,000 evals / sec** |
+| `BenchmarkSPL_Evaluate` | Phase 11 | **222.1 ns/op** | **0.22 µs** | 304 B/op (12 allocs) | **4,502,476 evals / sec** |
+| `BenchmarkSIEM_FormatCEF` | Phase 9 | **284.2 ns/op** | **0.28 µs** | 408 B/op (9 allocs) | **3,518,648 CEF events / sec** |
+| `BenchmarkOfflineMerkleInclusion_Verify` | Phase 8 | **497.1 ns/op** | **0.50 µs** | 1,152 B/op (16 allocs) | **2,011,667 proof verifications / sec** |
+| `BenchmarkEmbeddedRaft_Propose` | Phase 13 | **512.9 ns/op** | **0.51 µs** | 0 B/op (0 allocs) | **1,949,697 commits / sec** |
+| `BenchmarkZeroLossAuditWAL_WriteSync` | Phase 3.5 | **618.8 ns/op** | **0.62 µs** | 707 B/op (15 allocs) | **1,616,031 pre-commits / sec** |
+| `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **656.2 ns/op** | **0.66 µs** | 926 B/op (17 allocs) | **1,523,925 blocks / sec** |
+| `BenchmarkMultilingualGuard_Inspect` | Phase 12 | **1,831.0 ns/op** | **1.83 µs** | 600 B/op (8 allocs) | **546,149 inspections / sec** |
+| `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,598.0 ns/op** | **2.60 µs** | 5,432 B/op (76 allocs) | **384,911 epoch roots / sec** |
+| `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,605.0 ns/op** | **3.61 µs** | 3,688 B/op (79 allocs) | **277,392 MCP messages / sec** |
+| `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,450.0 ns/op** | **5.45 µs** | 560 B/op (5 allocs) | **183,486 classifications / sec** |
+| `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **31,435.0 ns/op** | **31.44 µs** | 2,265 B/op (18 allocs) | **31,811 deep scans / sec** |
 
 ### How to Reproduce All Benchmarks
 
-Execute the entire 884-test suite with a single command:
+Execute the entire 1,034-test suite with a single command:
 
 ```bash
 cd gateway
@@ -360,6 +364,9 @@ go test -count=1 -v ./...
 Or run targeted benchmark suites and micro-benchmarks:
 
 ```bash
+# Run Phase 11 to 13 Enterprise Benchmark (150 tests)
+go test -v -run TestPhase11To13EnterpriseBenchmark
+
 # Run Phase 5 to 10 Enterprise Benchmark (205 tests)
 go test -v -run TestPhase5To10EnterpriseBenchmark
 
@@ -722,7 +729,7 @@ Request arrives
 | **Dynamic Fleet Contagion & Quarantine** | ✅ | Mathematical blast-radius dampening & behavioral health scoring | [`python_workers/case_law_engine.py`](python_workers/case_law_engine.py) |
 | **SHA-256 Tamper-Evident Ledger** | ✅ | Immutable cryptographic hash chain committed to PostgreSQL via Kafka | [`python_workers/audit_worker.py`](python_workers/audit_worker.py) |
 | **React Mission Control Dashboard** | ✅ | Live trust economy gauge, hash-chained ledger stream, emergency stop | [`dashboard/`](dashboard/) |
-| **Automated Benchmark Suite (884 Tests)** | ✅ | Phases 5-10 (205), Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32) | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| **Automated Benchmark Suite (1,034 Tests)** | ✅ | Phases 11-13 (150), Phases 5-10 (205), Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32) | [`BENCHMARKS.md`](BENCHMARKS.md) |
 | **Phase 3.5: Zero-Loss Audit WAL** | ✅ | Synchronous memory ring-buffer WAL (628ns), zero event loss under broker partition | [`gateway/audit_wal.go`](gateway/audit_wal.go) |
 | **Phase 3.5: Multi-Partition Merkle Ledger** | ✅ | Partition sub-chains (654ns) + binary Epoch Merkle tree aggregation (2.4µs), 0.00% forks | [`gateway/merkle_ledger.go`](gateway/merkle_ledger.go) |
 | **Phase 4.1: Microsecond Zero-Hop Policy Engine** | ✅ | Pure-Go precedent engine (214ns, 9,400x speedup) with adaptive circuit breaker | [`gateway/inprocess_engine.go`](gateway/inprocess_engine.go) |
@@ -734,6 +741,9 @@ Request arrives
 | **Phase 8: One-Click Compliance Exporter** | ✅ | EU AI Act Article 14 & SOC 2 Type II certified reports + offline Merkle verifier (497ns) | [`gateway/compliance_exporter.go`](gateway/compliance_exporter.go) |
 | **Phase 9: SIEM Connector & Alert Dispatcher** | ✅ | Micro Focus ArcSight CEF (284ns) + Syslog RFC 5424 + deduplicated Slack/PagerDuty webhooks | [`gateway/alert_dispatcher.go`](gateway/alert_dispatcher.go) |
 | **Phase 10: Adaptive Adversarial Test Harness** | ✅ | Pareto-distributed burst generator + dynamic red-team injection permutations | [`gateway/phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) |
+| **Phase 11: Dynamic Declarative Policy Engine (SPL)** | ✅ | Native SPL AST parser, condition evaluator, atomic pointer hot-reloader (222ns) | [`gateway/declarative_policy.go`](gateway/declarative_policy.go) |
+| **Phase 12: Tier-2 Multilingual Semantic Guardrail** | ✅ | Cross-lingual defense (RU, ZH, HI, ES, AR), homoglyph normalizer, 2-tier engine (1.83µs) | [`gateway/multilingual_guard.go`](gateway/multilingual_guard.go) |
+| **Phase 13: Zero-Dependency Embedded Raft Mesh** | ✅ | In-binary Raft consensus state machine (512ns, 0 allocs), quorum freeze & anti-smurfing | [`gateway/embedded_raft_mesh.go`](gateway/embedded_raft_mesh.go) |
 
 ---
 
