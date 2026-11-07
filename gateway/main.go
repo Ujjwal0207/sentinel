@@ -815,6 +815,8 @@ func main() {
 	http.HandleFunc("/v1/chat/completions", OpenAIProxyHandler)
 	http.HandleFunc("/mcp", MCPProxyHandler)
 	http.HandleFunc("/mcp/v1", MCPProxyHandler)
+	http.HandleFunc("/v1/policies", policyHandler)
+	http.HandleFunc("/v1/cluster/raft", raftStatusHandler)
 
 	// 3. Start Server
 	port := ":8080"
@@ -833,6 +835,50 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"strict_auth":            strictAuthEnabled,
 		"require_intent_mandate": requireIntentMandate,
 		"timestamp":              time.Now().Format(time.RFC3339),
+	})
+}
+
+func policyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(globalDeclarativePolicyEngine.GetSource()))
+		return
+	}
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		err = globalDeclarativePolicyEngine.LoadPolicy(string(body))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Policy compilation failed: %v", err), http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"OK","message":"Policy hot-reloaded successfully"}`))
+		return
+	}
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
+func raftStatusHandler(w http.ResponseWriter, r *http.Request) {
+	leader := globalRaftCluster.GetLeader()
+	leaderID := "NONE"
+	term := uint64(0)
+	if leader != nil {
+		leaderID = leader.NodeID
+		term = leader.CurrentTerm
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"cluster_type": "embedded-raft-mesh",
+		"node_count":   len(globalRaftCluster.Nodes),
+		"leader_id":    leaderID,
+		"current_term": term,
+		"status":       "HEALTHY",
 	})
 }
 
