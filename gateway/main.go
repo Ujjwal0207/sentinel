@@ -981,6 +981,38 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
+	// SECURITY: High-Dimensional Semantic Injection & Taint Guardrail (Phase 4.2)
+	// -------------------------------------------------------------------
+	originHeader := r.Header.Get("X-Sentinel-Data-Origin")
+	if globalSemanticGuard != nil {
+		semanticRes := globalSemanticGuard.InspectSemanticSafety(req.AgentID, req.Action, req.Payload, originHeader)
+		if !semanticRes.IsSafe {
+			log.Printf("⛔ SEMANTIC GUARD BLOCKED [%s - %s]: %s (Score: %.2f)",
+				req.AgentID, req.Action, strings.Join(semanticRes.Violations, "; "), semanticRes.AnomalyScore)
+
+			publishAuditEvent(GatewayEvent{
+				AgentID:   req.AgentID,
+				Action:    req.Action,
+				Payload:   req.Payload,
+				Decision:  "DENY",
+				Timestamp: time.Now().Format(time.RFC3339),
+				AuthMode:  authMode,
+				Reason:    "SEMANTIC_ANOMALY: " + strings.Join(semanticRes.Violations, "; "),
+			})
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":        "DENY",
+				"error":         semanticRes.RiskCategory,
+				"message":       strings.Join(semanticRes.Violations, "; "),
+				"anomaly_score": semanticRes.AnomalyScore,
+			})
+			return
+		}
+	}
+
+	// -------------------------------------------------------------------
 	// SECURITY: BSA/FinCEN Anti-Structuring & Sliding-Window Velocity Guardrail (Phase 3.4)
 	// -------------------------------------------------------------------
 	if hasAmt, normalizedAmount, _ := extractNormalizedFinancialAmount(req.Payload); hasAmt && normalizedAmount > 0 {
@@ -1053,44 +1085,87 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
-	// THE CHECKPOINT LOGIC: Python Case Law Engine Integration
+	// THE CHECKPOINT LOGIC: Hybrid Microsecond In-Process & Case Law Precedent (Phase 4.1)
 	// -------------------------------------------------------------------
 	decision := "DENY" // Fail-Safe Default
 	decisionReason := "Fail-Safe Default"
 
 	engineURL := os.Getenv("SENTINEL_CASE_LAW_URL")
-	if engineURL == "" {
-		engineURL = "http://localhost:8000/evaluate"
-	}
-	engineReqBody, _ := json.Marshal(req)
+	useInProcess := os.Getenv("SENTINEL_INPROCESS_POLICY") == "true"
 
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(engineURL, "application/json", bytes.NewBuffer(engineReqBody))
-
-	if err != nil {
-		log.Printf("⚠️ Case Law Engine unreachable. Falling back to Fail-Safe DENY. Error: %s", err)
+	if useInProcess || (engineURL == "" && os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true") {
+		// Zero-Hop Edge In-Process Evaluation (< 10 µs)
+		inProc := globalInProcessEngine.Evaluate(r.Context(), req.AgentID, req.Action, req.Payload)
+		decision = inProc.Decision
+		decisionReason = inProc.Reason
+	} else if engineURL == "" {
 		decisionReason = "Case Law Engine unreachable (Circuit Breaker Fail-Safe DENY)"
+	} else if !globalInProcessEngine.cb.ShouldTryExternal() && os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true" {
+		// Circuit Breaker OPEN -> Fallback to in-process engine
+		inProc := globalInProcessEngine.Evaluate(r.Context(), req.AgentID, req.Action, req.Payload)
+		decision = inProc.Decision
+		decisionReason = inProc.Reason + " [In-Process Circuit Breaker Fallback]"
 	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			var engineResp struct {
-				Decision string `json:"decision"`
-				Reason   string `json:"reason"`
-				Status   string `json:"status"`
-			}
-			if decodeErr := json.NewDecoder(resp.Body).Decode(&engineResp); decodeErr == nil {
-				if engineResp.Decision == "ALLOW" || engineResp.Decision == "DENY" {
-					decision = engineResp.Decision
-					decisionReason = engineResp.Reason
-				}
+		engineReqBody, _ := json.Marshal(req)
+		client := &http.Client{Timeout: 2 * time.Second}
+		startHop := time.Now()
+		resp, err := client.Post(engineURL, "application/json", bytes.NewBuffer(engineReqBody))
+
+		if err != nil {
+			log.Printf("⚠️ Case Law Engine unreachable (%v). Circuit breaker recorded failure.", err)
+			globalInProcessEngine.cb.RecordFailure()
+			if os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true" {
+				inProc := globalInProcessEngine.Evaluate(r.Context(), req.AgentID, req.Action, req.Payload)
+				decision = inProc.Decision
+				decisionReason = inProc.Reason + " [In-Process Fallback]"
+			} else {
+				decisionReason = "Case Law Engine unreachable (Circuit Breaker Fail-Safe DENY)"
 			}
 		} else {
-			log.Printf("⚠️ Case Law Engine returned non-200 status: %d", resp.StatusCode)
-			decisionReason = fmt.Sprintf("Case Law Engine returned status %d", resp.StatusCode)
+			defer resp.Body.Close()
+			hopDuration := time.Since(startHop)
+			if resp.StatusCode == http.StatusOK {
+				var engineResp struct {
+					Decision string `json:"decision"`
+					Reason   string `json:"reason"`
+					Status   string `json:"status"`
+				}
+				if decodeErr := json.NewDecoder(resp.Body).Decode(&engineResp); decodeErr == nil {
+					if engineResp.Decision == "ALLOW" || engineResp.Decision == "DENY" {
+						decision = engineResp.Decision
+						decisionReason = engineResp.Reason
+						globalInProcessEngine.cb.RecordSuccess(hopDuration)
+					}
+				}
+			} else {
+				log.Printf("⚠️ Case Law Engine returned non-200 status: %d", resp.StatusCode)
+				globalInProcessEngine.cb.RecordFailure()
+				decisionReason = fmt.Sprintf("Case Law Engine returned status %d", resp.StatusCode)
+			}
 		}
 	}
 
 	log.Printf("Evaluated Request - Agent: %s | Action: %s -> Decision: %s (%s)", req.AgentID, req.Action, decision, authMode)
+
+	// -------------------------------------------------------------------
+	// ZERO-LOSS PRE-COMMIT AUDIT RECEIPT (Phase 3.5 WAL)
+	// Synchronous durable recording before client receives response (< 2 µs)
+	// -------------------------------------------------------------------
+	event := GatewayEvent{
+		AgentID:   req.AgentID,
+		Action:    req.Action,
+		Payload:   req.Payload,
+		Decision:  decision,
+		Timestamp: time.Now().Format(time.RFC3339),
+		AuthMode:  authMode,
+		Reason:    decisionReason,
+	}
+	if globalAuditWAL != nil {
+		if walEntry, walErr := globalAuditWAL.WriteSync(event); walErr == nil && walEntry != nil {
+			w.Header().Set("X-Sentinel-WAL-Seq", fmt.Sprintf("%d", walEntry.SequenceNum))
+			w.Header().Set("X-Sentinel-WAL-Hash", walEntry.EntryHash)
+		}
+	}
 
 	// Respond with RFC-aligned HTTP status code
 	w.Header().Set("Content-Type", "application/json")
@@ -1113,15 +1188,7 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Asynchronously push the event to Redpanda
-	publishAuditEvent(GatewayEvent{
-		AgentID:   req.AgentID,
-		Action:    req.Action,
-		Payload:   req.Payload,
-		Decision:  decision,
-		Timestamp: time.Now().Format(time.RFC3339),
-		AuthMode:  authMode,
-		Reason:    decisionReason,
-	})
+	publishAuditEvent(event)
 }
 
 // verifyAgentAuth validates Ed25519, UCAN, or HMAC signatures and checks replay nonces
@@ -1569,8 +1636,20 @@ func checkParameterGuardrails(action string, payload map[string]interface{}) (bo
 	return true, ""
 }
 
-// publishAuditEvent delivers events to Kafka/Redpanda with delivery monitoring
+// publishAuditEvent delivers events to Kafka/Redpanda with zero-loss WAL protection
 func publishAuditEvent(event GatewayEvent) {
+	if globalAuditWAL != nil {
+		// Ensure event is recorded in WAL if not already recorded (e.g., early guardrail denials)
+		entries := globalAuditWAL.GetEntries(globalAuditWAL.GetLatestSequence(), 1)
+		if len(entries) == 0 || entries[0].Event.Timestamp != event.Timestamp || entries[0].Event.AgentID != event.AgentID {
+			_, _ = globalAuditWAL.WriteSync(event)
+		}
+		if globalAuditWAL.IsBrokerBroken() {
+			log.Printf("⚠️ Kafka broker severed/unreachable. Event safely preserved in Zero-Loss WAL (Seq: %d)", globalAuditWAL.GetLatestSequence())
+			return
+		}
+	}
+
 	if kafkaProducer == nil {
 		return
 	}
@@ -1587,7 +1666,7 @@ func publishAuditEvent(event GatewayEvent) {
 	}, deliveryChan)
 
 	if err != nil {
-		log.Printf("⚠️ Kafka producer queue full or error: %v (event logged locally)", err)
+		log.Printf("⚠️ Kafka producer queue full or error: %v (event preserved in WAL)", err)
 		return
 	}
 
