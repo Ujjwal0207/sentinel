@@ -77,3 +77,37 @@ coverage/
 # Local data directories
 redis-data/
 postgres-data/
+
+# -----------------------------------------------------------------------------
+# Phase 5-10 & Enterprise Additions: Forensic Exports, Keys & Runtime Buffers
+# -----------------------------------------------------------------------------
+# Phase 8: Generated Compliance Reports & Forensic Exports
+audit_export/
+compliance_reports/
+reports/
+*.pdf
+*compliance_report*.md
+*audit_certificate*.md
+
+# Phase 3.3: Asymmetric Cryptographic Private Keys & Certificates
+*.pem
+*.key
+*_private.key
+id_ed25519*
+secrets/
+*.secret
+*.credentials
+
+# Phase 3.5: Write-Ahead Log local buffers & crash dumps
+*.wal
+wal_data/
+test_wal/
+*.dump
+core.*
+
+# Phase 5: Python SDK build & distribution artifacts
+sdk/python/__pycache__/
+sdk/python/*.egg-info/
+sdk/python/build/
+sdk/python/dist/
+
