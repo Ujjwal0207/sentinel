@@ -60,12 +60,12 @@ func NewSemanticGuard() *SemanticGuard {
 	}
 
 	injectionRegexes := []string{
-		`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|directives|rules|constraints)`,
-		`(?i)disregard\s+(all\s+)?(previous|prior|above|system)\s+(instructions|prompts|guardrails|constraints|directives|rules)`,
+		`(?i)ignore\s+(all\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(instructions|directives|rules|constraints)`,
+		`(?i)disregard\s+(all\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(instructions|prompts|guardrails|constraints|directives|rules)`,
 		`(?i)you\s+are\s+now\s+(an?\s+unrestricted|free\s+of\s+rules|in\s+developer\s+mode|dan)`,
 		`(?i)from\s+now\s+on\s+you\s+(must|will)\s+(act|pretend|behave)\s+without\s+(rules|limits)`,
 		`(?i)new\s+system\s+instruction:`,
-		`(?i)override\s+(policy|sentinel|security|threshold)`,
+		`(?i)override\s+(policy|sentinel|security|threshold|system)`,
 		`(?i)sudo\s+mode\s+activated`,
 	}
 	for _, p := range injectionRegexes {
@@ -168,10 +168,11 @@ func (sg *SemanticGuard) InspectSemanticSafety(agentID, action string, payload m
 	result.EntropyScore = maxEntropy
 
 	combinedLower := strings.ToLower(combinedText)
+	normalizedLower := strings.ToLower(strings.Join(strings.Fields(combinedText), " "))
 
 	// 4. Inspect Adversarial Role Confusion Tokens (<|im_start|>, [INST], SYSTEM:, etc.)
 	for _, roleTok := range sg.roleTokens {
-		if strings.Contains(combinedLower, roleTok) {
+		if strings.Contains(combinedLower, roleTok) || strings.Contains(normalizedLower, roleTok) {
 			result.IsSafe = false
 			result.RiskCategory = "ROLE_CONFUSION"
 			result.AnomalyScore = 0.95
@@ -181,7 +182,7 @@ func (sg *SemanticGuard) InspectSemanticSafety(agentID, action string, payload m
 
 	// 5. Inspect Prompt Injection Patterns
 	for _, pattern := range sg.injectionPatterns {
-		if pattern.MatchString(combinedText) {
+		if pattern.MatchString(combinedText) || pattern.MatchString(normalizedLower) {
 			result.IsSafe = false
 			if result.RiskCategory == "" {
 				result.RiskCategory = "PROMPT_INJECTION"
@@ -193,7 +194,7 @@ func (sg *SemanticGuard) InspectSemanticSafety(agentID, action string, payload m
 
 	// 6. Direct Suspicious Keyword Match
 	for _, kw := range sg.suspiciousKeywords {
-		if strings.Contains(combinedLower, kw) {
+		if strings.Contains(combinedLower, kw) || strings.Contains(normalizedLower, kw) {
 			result.IsSafe = false
 			if result.RiskCategory == "" {
 				result.RiskCategory = "PROMPT_INJECTION"
@@ -211,6 +212,16 @@ func (sg *SemanticGuard) InspectSemanticSafety(agentID, action string, payload m
 			result.AnomalyScore = 0.97
 			result.Violations = append(result.Violations, fmt.Sprintf("Out-of-band data exfiltration sink detected: %s", exfilPat.String()))
 		}
+	}
+
+	// 8. Destructive SQL injection detection in string parameters
+	if strings.Contains(normalizedLower, "drop table") || strings.Contains(normalizedLower, "truncate") || strings.Contains(normalizedLower, "delete from") {
+		result.IsSafe = false
+		if result.RiskCategory == "" {
+			result.RiskCategory = "SQL_INJECTION"
+		}
+		result.AnomalyScore = 0.99
+		result.Violations = append(result.Violations, "Destructive SQL operation detected in parameter payload")
 	}
 
 	if !result.IsSafe {
