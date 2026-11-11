@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  # Standalone Pure-Go Sentinel Edge Gateway (Zero External Dependencies)
+  sentinel-gateway:
+    image: golang:1.22-alpine
+    container_name: sentinel_edge_gateway
+    working_dir: /app
+    volumes:
+      - ./gateway:/app
+      - sentinel_wal_data:/app/.sentinel
+    environment:
+      - PORT=8080
+      - SENTINEL_MODE=standalone
+      - SENTINEL_INPROCESS_POLICY=true
+      - SENTINEL_WAL_PATH=/app/.sentinel/audit.wal
+    ports:
+      - "8080:8080"
+    command: go run . run
+
+volumes:
+  sentinel_wal_data:
+
