@@ -329,6 +329,11 @@ Implemented in [`gateway/phase5_to_10_enterprise_benchmark_test.go`](gateway/pha
 - **Single-Use Replay Nonce Interception:** Verified that a nonce committed on Node 1 is immediately and deterministically rejected as consumed when presented to Node 2 or Node 3.
 - **Quorum-Enforced Fleet Freeze & Partition Resilience:** Simulated split-brain network partitioning; verified that minority partitions fail closed while the majority quorum maintains authoritative cluster defense.
 
+### 10. Industry Readiness & Dual-Surface Benchmark (`STDIO`, `WAL-VERIFY`, `MODE` - 30 Scenarios)
+- **Stdio Line-Delimited MCP Proxying (`STDIO-001..010`):** Mediates bidirectional JSON-RPC streams over standard I/O pipes for Claude Desktop and Cursor. Transparently approves discovery calls (`tools/list`, `ping`), blocks destructive SQL statements and threshold violations inline without contacting upstream tools, and returns standard RFC error structures in **$3.52\,\mu\text{s}$**.
+- **Offline Cryptographic WAL Verifier (`WAL-VERIFY-001..010`):** Validates append-only audit files with 100% offline mathematical proof ($2.59\,\mu\text{s}$ per transaction). Recomputes SHA-256 continuous hash links, verifies strictly monotonic sequences, calculates binary Epoch Merkle roots, and immediately flags single-bit tampering or sequence gaps.
+- **Dual-Surface Execution Modes (`MODE-001..010`):** Decouples the Pure-Go **Edge Data Plane** (`SENTINEL_MODE=standalone`) from the **Cloud Control Plane** (`DISTRIBUTED_SAAS`). Validates dynamic mode reporting and native SPL fallback policy evaluation without requiring Kafka, PostgreSQL, or Python workers on the hot path.
+
 ---
 
 ## 📈 Apple M5 Complete Silicon Micro-Benchmark Telemetry
@@ -347,13 +352,22 @@ Empirically verified on Apple M5 hardware with sub-nanosecond hardware counters:
 | `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **656.2 ns/op** | **0.66 µs** | 926 B/op (17 allocs) | **1,523,925 partition blocks / sec** |
 | `BenchmarkMultilingualGuard_Inspect` | Phase 12 | **1,831.0 ns/op** | **1.83 µs** | 600 B/op (8 allocs) | **546,149 inspections / sec** |
 | `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,598.0 ns/op** | **2.60 µs** | 5,432 B/op (76 allocs) | **384,911 epoch roots / sec** |
+| `BenchmarkStdioMCP_InterceptMessage` | Industry Prep | **3,519.0 ns/op** | **3.52 µs** | 3,640 B/op (80 allocs) | **284,171 MCP messages / sec** |
 | `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,605.0 ns/op** | **3.61 µs** | 3,688 B/op (79 allocs) | **277,392 MCP messages / sec** |
 | `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,450.0 ns/op** | **5.45 µs** | 560 B/op (5 allocs) | **183,486 classifications / sec** |
 | `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **31,435.0 ns/op** | **31.44 µs** | 2,265 B/op (18 allocs) | **31,811 deep inspections / sec** |
+| `BenchmarkOfflineWAL_VerifyReader` (100 txns) | Industry Prep | **259,242.0 ns/op** | **259.2 µs** | 324,868 B/op (3,765 allocs) | **38,573 verified txns / sec** |
 
 ---
 
 ## 🛠️ How to Reproduce All Benchmarks
+
+To execute the Industry Readiness Benchmark (30 scenarios: Stdio MCP, Offline WAL Verifier, Dual Modes):
+
+```bash
+cd /Users/personal/Desktop/sentinel/gateway
+go test -v -run TestIndustryReadinessBenchmark
+```
 
 To execute the Phase 11 to 13 Enterprise Harsh Benchmark (150 scenarios):
 
@@ -425,7 +439,7 @@ cd /Users/personal/Desktop/sentinel/gateway
 go test -v -run TestRealityCheckBenchmark
 ```
 
-To run the full Sentinel Gateway test suite (all 1,034 total automated assertions):
+To run the full Sentinel Gateway test suite (all 1,064 total automated assertions):
 
 ```bash
 cd /Users/personal/Desktop/sentinel/gateway
