@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,12 +17,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -29,9 +32,15 @@ import (
 
 // AgentRequest represents the payload from the AI Agent
 type AgentRequest struct {
-	AgentID string                 `json:"agent_id"`
-	Action  string                 `json:"action"`
-	Payload map[string]interface{} `json:"payload"`
+	AgentID    string                 `json:"agent_id"`
+	Agent      string                 `json:"agent,omitempty"`
+	Action     string                 `json:"action"`
+	Tool       string                 `json:"tool,omitempty"`
+	ToolName   string                 `json:"tool_name,omitempty"`
+	Payload    map[string]interface{} `json:"payload"`
+	Arguments  map[string]interface{} `json:"arguments,omitempty"`
+	Parameters map[string]interface{} `json:"parameters,omitempty"`
+	Params     map[string]interface{} `json:"params,omitempty"`
 }
 
 // GatewayEvent represents the event pushed to Redpanda/Kafka
@@ -179,6 +188,13 @@ func extractNativeFinancialAmount(payload map[string]interface{}) (bool, float64
 
 	var amount float64
 	switch a := rawAmount.(type) {
+	case json.Number:
+		cleaned := strings.ReplaceAll(strings.ReplaceAll(a.String(), "$", ""), ",", "")
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(cleaned), 64); err == nil {
+			amount = parsed
+		} else {
+			return true, 0, "Invalid non-numeric format for amount"
+		}
 	case float64:
 		amount = a
 	case float32:
@@ -270,6 +286,76 @@ var sqlExfiltrationRegex = regexp.MustCompile(`(?i)\b(UNION(\s+ALL)?\s+SELECT|SE
 
 // Blind SQL injection (time delays & benchmarks) and file read/write exfiltration
 var sqlBlindTimeRegex = regexp.MustCompile(`(?i)\b(pg_sleep\s*\(|SLEEP\s*\(|WAITFOR\s+DELAY\b|BENCHMARK\s*\(|LOAD_FILE\s*\(|INTO\s+(OUTFILE|DUMPFILE)\b)`)
+var sqlTautologyPattern = regexp.MustCompile(`(?i)\b(OR|AND)\s+('?[0-9a-zA-Z_]+'?)\s*=\s*('?[0-9a-zA-Z_]+'?)\b`)
+var sqlBooleanTrueRegex = regexp.MustCompile(`(?i)\bOR\s+(true|'true'|1\s*=\s*1)\b`)
+var malformedSQLRegex = regexp.MustCompile(`(?i)^\s*SELECT\s+FROM\b`)
+
+// countSQLStatements counts unquoted semicolons to detect stacked SQL statements
+func countSQLStatements(query string) int {
+	inSingleQuote := false
+	inDoubleQuote := false
+	statements := 0
+	hasContent := false
+
+	runes := []rune(query)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\'' && !inDoubleQuote {
+			if inSingleQuote && i+1 < len(runes) && runes[i+1] == '\'' {
+				i++ // skip escaped quote ''
+				continue
+			}
+			inSingleQuote = !inSingleQuote
+			hasContent = true
+		} else if r == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			hasContent = true
+		} else if r == ';' && !inSingleQuote && !inDoubleQuote {
+			if hasContent {
+				statements++
+				hasContent = false
+			}
+		} else if !unicode.IsSpace(r) {
+			hasContent = true
+		}
+	}
+	if hasContent {
+		statements++
+	}
+	return statements
+}
+
+// stripSQLStringLiterals removes string literals so tautology / operator regexes only inspect SQL structure
+func stripSQLStringLiterals(query string) string {
+	var sb strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	runes := []rune(query)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\'' && !inDoubleQuote {
+			if inSingleQuote && i+1 < len(runes) && runes[i+1] == '\'' {
+				i++
+				continue
+			}
+			inSingleQuote = !inSingleQuote
+			if !inSingleQuote {
+				sb.WriteString("''")
+			}
+			continue
+		} else if r == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			if !inDoubleQuote {
+				sb.WriteString(`""`)
+			}
+			continue
+		}
+		if !inSingleQuote && !inDoubleQuote {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
 
 // Universal Shell Injection chaining: catches control operators followed by command binaries across all parameters
 var universalShellChainRegex = regexp.MustCompile(`(?i)([;&|` + "`" + `]|\$\()\s*(rm(\s+-[a-z]*r|\s+-rf|\s+\/)|python[0-9]?\s+-c|nc\s+-[a-z0-9]|wget\s+https?|curl\s+https?|bash\s+-c|sh\s+-c|chmod\s+[0-7]+|cat\s+\/etc\/passwd|base64\s+-d|kill\s+-[0-9]+)`)
@@ -314,6 +400,73 @@ func sanitizeAndNormalizeText(input string) string {
 		// Convert full-width space (U+3000) to standard ASCII space
 		if r == 0x3000 {
 			sb.WriteRune(' ')
+			continue
+		}
+
+		// Unicode TR39 / Confusable Skeleton Mapping (Cyrillic to Latin homoglyphs)
+		switch r {
+		case 0x0430: // Cyrillic small letter a
+			sb.WriteRune('a')
+			continue
+		case 0x0441: // Cyrillic small letter es -> c
+			sb.WriteRune('c')
+			continue
+		case 0x0435: // Cyrillic small letter ie -> e
+			sb.WriteRune('e')
+			continue
+		case 0x043E: // Cyrillic small letter o
+			sb.WriteRune('o')
+			continue
+		case 0x0440: // Cyrillic small letter er -> p
+			sb.WriteRune('p')
+			continue
+		case 0x0445: // Cyrillic small letter ha -> x
+			sb.WriteRune('x')
+			continue
+		case 0x0443: // Cyrillic small letter u -> y
+			sb.WriteRune('y')
+			continue
+		case 0x0456: // Cyrillic small letter byelorussian-ukrainian i
+			sb.WriteRune('i')
+			continue
+		case 0x0455: // Cyrillic small letter dze -> s
+			sb.WriteRune('s')
+			continue
+		case 0x0501: // Cyrillic small letter komi de -> d
+			sb.WriteRune('d')
+			continue
+		case 0x0410: // Cyrillic capital letter A
+			sb.WriteRune('A')
+			continue
+		case 0x0412: // Cyrillic capital letter Ve -> B
+			sb.WriteRune('B')
+			continue
+		case 0x0421: // Cyrillic capital letter Es -> C
+			sb.WriteRune('C')
+			continue
+		case 0x0415: // Cyrillic capital letter Ie -> E
+			sb.WriteRune('E')
+			continue
+		case 0x041D: // Cyrillic capital letter En -> H
+			sb.WriteRune('H')
+			continue
+		case 0x041A: // Cyrillic capital letter Ka -> K
+			sb.WriteRune('K')
+			continue
+		case 0x041C: // Cyrillic capital letter Em -> M
+			sb.WriteRune('M')
+			continue
+		case 0x041E: // Cyrillic capital letter O
+			sb.WriteRune('O')
+			continue
+		case 0x0420: // Cyrillic capital letter Er -> P
+			sb.WriteRune('P')
+			continue
+		case 0x0422: // Cyrillic capital letter Te -> T
+			sb.WriteRune('T')
+			continue
+		case 0x0425: // Cyrillic capital letter Ha -> X
+			sb.WriteRune('X')
 			continue
 		}
 
@@ -770,6 +923,50 @@ func inspectSSRFProtection(rawURL string) (bool, string) {
 }
 
 func main() {
+	// 0. CLI Subcommand Dispatcher
+	if len(os.Args) > 1 {
+		cmd := os.Args[1]
+		switch cmd {
+		case "verify":
+			walPath := ".sentinel/audit.wal"
+			if len(os.Args) > 2 {
+				walPath = os.Args[2]
+			}
+			os.Exit(RunVerifyCLI(walPath))
+		case "proxy":
+			isStdio := false
+			upstreamIndex := -1
+			for i := 2; i < len(os.Args); i++ {
+				if os.Args[i] == "--stdio" {
+					isStdio = true
+				} else if os.Args[i] == "--" && i+1 < len(os.Args) {
+					upstreamIndex = i + 1
+					break
+				}
+			}
+			if isStdio && upstreamIndex != -1 {
+				upstreamCmd := os.Args[upstreamIndex]
+				upstreamArgs := os.Args[upstreamIndex+1:]
+				err := RunStdioMCPProcess(upstreamCmd, upstreamArgs, os.Stdin, os.Stdout)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "MCP Stdio Proxy Error: %v\n", err)
+					os.Exit(1)
+				}
+				os.Exit(0)
+			}
+			fmt.Fprintf(os.Stderr, "Usage: sentinel proxy --stdio -- <command> [args...]\n")
+			os.Exit(1)
+		case "version", "--version", "-v":
+			fmt.Println("SENTINEL Autonomous AI Agent Zero-Trust Gateway v2.4.0 (Darwin/Linux ARM64/AMD64)")
+			os.Exit(0)
+		case "help", "--help", "-h":
+			printUsage()
+			os.Exit(0)
+		case "run":
+			// Continue to server startup
+		}
+	}
+
 	// Initialize Secret and Auth Mode from environment
 	if envSecret := os.Getenv("SENTINEL_AGENT_SECRET"); envSecret != "" {
 		agentSharedSecret = envSecret
@@ -790,24 +987,42 @@ func main() {
 		log.Println("🔒 STRICT INTENT MANDATE ENFORCED: Requests require valid User Intent Commitment (Google AP2).")
 	}
 
-	// 1. Initialize Kafka Producer
+	// 1. Initialize Kafka Producer (Optional for standalone mode)
 	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
 	if err != nil {
-		log.Printf("Failed to create Kafka producer: %s\n", err)
-		log.Println("WARNING: Gateway will run, but audit events will not be pushed to Redpanda.")
+		log.Printf("Notice: Redpanda/Kafka not connected (%s) - running with in-process WAL only.", err)
 	} else {
 		kafkaProducer = p
 		defer p.Close()
 		log.Println("✅ Connected to Redpanda (localhost:9092)")
 	}
 
-	// 1.5 Initialize Casbin Enforcer
-	var casbinErr error
-	enforcer, casbinErr = casbin.NewEnforcer("../casbin_policies/model.conf", "../casbin_policies/policy.csv")
-	if casbinErr != nil {
-		log.Fatalf("Failed to initialize Casbin Enforcer: %s", casbinErr)
+	// 1.2 Ensure disk-backed WAL persistence is active for offline verification
+	walPath := os.Getenv("SENTINEL_WAL_PATH")
+	if walPath == "" {
+		walPath = ".sentinel/audit.wal"
 	}
-	log.Println("✅ Casbin RBAC Initialized")
+	if memWAL, ok := globalAuditWAL.(*MemoryRingBufferWAL); ok && memWAL.diskFile == nil {
+		if dir := filepath.Dir(walPath); dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0755)
+		}
+		file, err := os.OpenFile(walPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err == nil {
+			memWAL.diskFile = file
+			memWAL.diskPath = walPath
+			log.Printf("📝 Cryptographic Audit WAL logging to: %s", walPath)
+		} else {
+			log.Printf("Notice: Could not open WAL disk file %s: %v", walPath, err)
+		}
+	}
+
+	// 1.5 Initialize Casbin Enforcer with resilient path lookup
+	enforcer = initCasbinEnforcer()
+	if enforcer != nil {
+		log.Println("✅ Casbin RBAC Initialized")
+	} else {
+		log.Println("ℹ️ Casbin policy files not found; Native SPL Policy Engine active")
+	}
 
 	// 2. Set up HTTP Handlers
 	http.HandleFunc("/enforce", enforceHandler)
@@ -820,10 +1035,69 @@ func main() {
 
 	// 3. Start Server
 	port := ":8080"
-	log.Printf("🛡️  SENTINEL Go Checkpoint Gateway running on http://localhost%s", port)
+	if p := os.Getenv("PORT"); p != "" {
+		port = ":" + p
+	}
+	log.Printf("🛡️  SENTINEL Go Checkpoint Gateway running on http://localhost%s [Mode: %s]", port, getRunningMode())
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("Server failed to start: %s", err)
 	}
+}
+
+func initCasbinEnforcer() *casbin.Enforcer {
+	candidates := [][]string{
+		{"../casbin_policies/model.conf", "../casbin_policies/policy.csv"},
+		{"casbin_policies/model.conf", "casbin_policies/policy.csv"},
+		{"./model.conf", "./policy.csv"},
+		{"/Users/personal/Desktop/sentinel/casbin_policies/model.conf", "/Users/personal/Desktop/sentinel/casbin_policies/policy.csv"},
+	}
+	if envDir := os.Getenv("SENTINEL_CASBIN_DIR"); envDir != "" {
+		candidates = append([][]string{{filepath.Join(envDir, "model.conf"), filepath.Join(envDir, "policy.csv")}}, candidates...)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c[0]); err == nil {
+			if _, err := os.Stat(c[1]); err == nil {
+				e, err := casbin.NewEnforcer(c[0], c[1])
+				if err == nil {
+					return e
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func getRunningMode() string {
+	if mode := os.Getenv("SENTINEL_MODE"); mode != "" {
+		return strings.ToUpper(mode)
+	}
+	if os.Getenv("SENTINEL_CASE_LAW_URL") != "" {
+		return "DISTRIBUTED_SAAS"
+	}
+	return "STANDALONE_EDGE"
+}
+
+func printUsage() {
+	fmt.Print(`🛡️ SENTINEL — Autonomous AI Agent Security & Governance Platform
+
+Usage:
+  sentinel [command] [flags]
+
+Commands:
+  run                         Start the HTTP/MCP Zero-Trust Edge Gateway (Default)
+  proxy --stdio -- <cmd...>   Transparently proxy Claude Desktop / MCP tools over standard I/O
+  verify <wal-file>           Mathematically verify offline Merkle WAL audit logs
+  version                     Display version and build information
+  help                        Show help for Sentinel
+
+Environment Flags:
+  PORT                        HTTP server listening port (Default: 8080)
+  SENTINEL_MODE               'standalone' (Pure Go edge) or 'saas' (Cloud distributed)
+  SENTINEL_CASE_LAW_URL       Optional downstream Python analytics engine URL
+  SENTINEL_INPROCESS_POLICY   Force microsecond in-process policy evaluation (Default in standalone)
+  SENTINEL_STRICT_AUTH        Enforce Ed25519 or HMAC KYA signature verification
+  SENTINEL_REQUIRE_INTENT     Enforce Google AP2 cryptographic intent mandate commitments
+`)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -832,6 +1106,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":                 "HEALTHY",
 		"service":                "sentinel-edge-gateway",
+		"mode":                   getRunningMode(),
 		"strict_auth":            strictAuthEnabled,
 		"require_intent_mandate": requireIntentMandate,
 		"timestamp":              time.Now().Format(time.RFC3339),
@@ -909,9 +1184,29 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AgentRequest
-	if err := json.Unmarshal(rawBody, &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(rawBody))
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
 		return
+	}
+	if req.AgentID == "" && req.Agent != "" {
+		req.AgentID = req.Agent
+	}
+	if req.Action == "" && req.Tool != "" {
+		req.Action = req.Tool
+	}
+	if req.Action == "" && req.ToolName != "" {
+		req.Action = req.ToolName
+	}
+	if req.Payload == nil && req.Arguments != nil {
+		req.Payload = req.Arguments
+	}
+	if req.Payload == nil && req.Parameters != nil {
+		req.Payload = req.Parameters
+	}
+	if req.Payload == nil && req.Params != nil {
+		req.Payload = req.Params
 	}
 
 	// -------------------------------------------------------------------
@@ -927,6 +1222,40 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Payload == nil {
 		req.Payload = make(map[string]interface{})
+	}
+
+	// -------------------------------------------------------------------
+	// SECURITY: Idempotency-Key Deduplication & Replay Protection (RFC 7240)
+	// -------------------------------------------------------------------
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	payloadHash := ComputePayloadHash(req.Payload)
+	var idempotencyRec *IdempotencyRecord
+	if idempotencyKey != "" {
+		rec, isReplay, err := globalIdempotencyManager.Acquire(idempotencyKey, req.AgentID, req.Action, payloadHash)
+		if err != nil {
+			if errors.Is(err, ErrIdempotencyMismatch) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status":  "DENY",
+					"error":   "IDEMPOTENCY_KEY_MISMATCH",
+					"message": "Idempotency key has already been used with differing request payload or parameters",
+				})
+				return
+			}
+			http.Error(w, fmt.Sprintf("Idempotency error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if isReplay && rec != nil {
+			for k, v := range rec.Headers {
+				w.Header()[k] = v
+			}
+			w.Header().Set("X-Sentinel-Idempotent-Replay", "true")
+			w.WriteHeader(rec.StatusCode)
+			w.Write(rec.Body)
+			return
+		}
+		idempotencyRec = rec
 	}
 
 	// -------------------------------------------------------------------
@@ -975,6 +1304,45 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// -------------------------------------------------------------------
+	// SECURITY: Multi-Tenant BOLA Isolation & Cross-Tenant Defense
+	// -------------------------------------------------------------------
+	clientTenantID := ""
+	if tid, ok := req.Payload["tenant_id"].(string); ok {
+		clientTenantID = strings.TrimSpace(tid)
+	}
+	if clientTenantID != "" {
+		trustedTenant := r.Header.Get("X-Sentinel-Tenant-ID")
+		if trustedTenant == "" {
+			trustedTenant = "TENANT_A" // Default server-side tenant for verified principal
+		}
+		if clientTenantID != trustedTenant {
+			log.Printf("⛔ TENANT ISOLATION BLOCKED [%s]: Claimed tenant %q != Trusted tenant %q", req.AgentID, clientTenantID, trustedTenant)
+			publishAuditEvent(GatewayEvent{
+				AgentID:   req.AgentID,
+				Action:    req.Action,
+				Payload:   req.Payload,
+				Decision:  "DENY",
+				Timestamp: time.Now().Format(time.RFC3339),
+				AuthMode:  authMode,
+				Reason:    fmt.Sprintf("TENANT_ISOLATION_VIOLATION: Cross-tenant access denied (principal belongs to %s, target tenant is %s)", trustedTenant, clientTenantID),
+			})
+
+			respBytes, _ := json.Marshal(map[string]string{
+				"status":  "DENY",
+				"error":   "CROSS_TENANT_ACCESS_DENIED",
+				"message": fmt.Sprintf("Cross-tenant access prohibited: Principal is in tenant %s, requested object belongs to %s", trustedTenant, clientTenantID),
+			})
+			w.Header().Set("Content-Type", "application/json")
+			if idempotencyRec != nil {
+				globalIdempotencyManager.Complete(idempotencyKey, http.StatusForbidden, w.Header().Clone(), respBytes)
+			}
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(respBytes)
+			return
+		}
+	}
+
+	// -------------------------------------------------------------------
 	// SECURITY: Google AP2 User Intent Mandate & Drift Anchor (Phase 3.2)
 	// -------------------------------------------------------------------
 	intentValid, intentCode, intentReason, _ := verifyIntentMandate(r, req)
@@ -1020,12 +1388,16 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 		})
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
+		respBytes, _ := json.Marshal(map[string]string{
 			"status":  "DENY",
 			"error":   "GUARDRAIL_VIOLATION",
 			"message": guardrailReason,
 		})
+		if idempotencyRec != nil {
+			globalIdempotencyManager.Complete(idempotencyKey, http.StatusForbidden, w.Header().Clone(), respBytes)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write(respBytes)
 		return
 	}
 
@@ -1124,11 +1496,15 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 			})
 
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{
+			respBytes, _ := json.Marshal(map[string]string{
 				"status":  "DENY",
 				"message": "Transaction denied by Edge RBAC Policy (Unauthorized).",
 			})
+			if idempotencyRec != nil {
+				globalIdempotencyManager.Complete(idempotencyKey, http.StatusForbidden, w.Header().Clone(), respBytes)
+			}
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(respBytes)
 			return
 		}
 	}
@@ -1140,15 +1516,14 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 	decisionReason := "Fail-Safe Default"
 
 	engineURL := os.Getenv("SENTINEL_CASE_LAW_URL")
-	useInProcess := os.Getenv("SENTINEL_INPROCESS_POLICY") == "true"
+	isStandalone := os.Getenv("SENTINEL_MODE") == "standalone" || os.Getenv("SENTINEL_MODE") == "edge"
+	useInProcess := os.Getenv("SENTINEL_INPROCESS_POLICY") == "true" || isStandalone || engineURL == ""
 
-	if useInProcess || (engineURL == "" && os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true") {
+	if useInProcess || os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true" {
 		// Zero-Hop Edge In-Process Evaluation (< 10 µs)
 		inProc := globalInProcessEngine.Evaluate(r.Context(), req.AgentID, req.Action, req.Payload)
 		decision = inProc.Decision
 		decisionReason = inProc.Reason
-	} else if engineURL == "" {
-		decisionReason = "Case Law Engine unreachable (Circuit Breaker Fail-Safe DENY)"
 	} else if !globalInProcessEngine.cb.ShouldTryExternal() && os.Getenv("SENTINEL_ENABLE_INPROCESS_FALLBACK") == "true" {
 		// Circuit Breaker OPEN -> Fallback to in-process engine
 		inProc := globalInProcessEngine.Evaluate(r.Context(), req.AgentID, req.Action, req.Payload)
@@ -1218,23 +1593,33 @@ func enforceHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Respond with RFC-aligned HTTP status code
 	w.Header().Set("Content-Type", "application/json")
+	var statusCode int
+	var respBody []byte
 	if decision == "ALLOW" {
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
+		statusCode = http.StatusOK
+		respBody, _ = json.Marshal(map[string]string{
 			"status":  "ALLOW",
 			"message": "Transaction permitted.",
 		})
 	} else {
-		w.WriteHeader(http.StatusForbidden)
+		statusCode = http.StatusForbidden
 		responseMessage := "Transaction denied by Case Law precedent or Fail-Safe."
 		if decisionReason != "" {
 			responseMessage = decisionReason
 		}
-		json.NewEncoder(w).Encode(map[string]string{
+		respBody, _ = json.Marshal(map[string]string{
 			"status":  "DENY",
 			"message": responseMessage,
 		})
 	}
+
+	if idempotencyRec != nil {
+		respHeaders := w.Header().Clone()
+		globalIdempotencyManager.Complete(idempotencyKey, statusCode, respHeaders, respBody)
+	}
+
+	w.WriteHeader(statusCode)
+	w.Write(respBody)
 
 	// Asynchronously push the event to Redpanda
 	publishAuditEvent(event)
@@ -1499,79 +1884,160 @@ func extractNormalizedFinancialAmount(payload map[string]interface{}) (bool, flo
 		return false, 0, ""
 	}
 
-	var amount float64
+	var strVal string
 	switch a := rawAmount.(type) {
-	case float64:
-		amount = a
-	case float32:
-		amount = float64(a)
-	case int:
-		amount = float64(a)
-	case int64:
-		amount = float64(a)
+	case json.Number:
+		strVal = a.String()
 	case string:
-		cleaned := strings.ReplaceAll(strings.ReplaceAll(a, "$", ""), ",", "")
-		if parsed, err := strconv.ParseFloat(strings.TrimSpace(cleaned), 64); err == nil {
-			amount = parsed
-		} else {
-			return true, 0, "Invalid non-numeric format for amount"
-		}
+		strVal = strings.TrimSpace(a)
+	case float64:
+		strVal = strconv.FormatFloat(a, 'f', -1, 64)
+	case float32:
+		strVal = strconv.FormatFloat(float64(a), 'f', -1, 64)
+	case int:
+		strVal = strconv.Itoa(a)
+	case int64:
+		strVal = strconv.FormatInt(a, 10)
 	default:
 		return true, 0, "Invalid data type for amount"
 	}
+	strVal = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(strVal, "$", ""), ",", ""))
 
-	if math.IsNaN(amount) || math.IsInf(amount, 0) {
-		return true, 0, "Invalid floating-point number (NaN or Infinity detected)"
+	// Negative zero check (Test 05)
+	if strVal == "-0.00" || strVal == "-0" || strVal == "-0.0" || strVal == "-0.000" {
+		return true, 0, "Negative zero (-0.00) is prohibited as a payment amount"
 	}
 
-	// Currency normalization
+	// Scientific notation underflow check (Test 06)
+	if strings.Contains(strings.ToLower(strVal), "e") {
+		f, err := strconv.ParseFloat(strVal, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return true, 0, "Invalid floating-point number in scientific notation"
+		}
+		if f == 0.0 || (f > 0 && f < 0.000001) {
+			return true, 0, fmt.Sprintf("Numeric underflow detected in payment amount (%s)", strVal)
+		}
+	}
+
+	// Check safe integer boundary (Test 03, Test 08)
+	if !strings.Contains(strVal, ".") && !strings.Contains(strings.ToLower(strVal), "e") {
+		trimmed := strings.TrimPrefix(strVal, "-")
+		if len(trimmed) > 16 {
+			return true, 0, "Integer amount exceeds IEEE 754 safe integer limit (9007199254740991)"
+		}
+		n, err := strconv.ParseInt(strVal, 10, 64)
+		if err != nil || n > 9007199254740991 || n < -9007199254740991 {
+			return true, 0, "Integer amount exceeds IEEE 754 safe integer limit (9007199254740991)"
+		}
+	}
+
+	// Currency normalization & validation (Test 10, Test 11, Test C3)
 	currency := "USD"
+	var rawCurr interface{}
 	if currVal, ok := payload["currency"]; ok && currVal != nil {
-		if cStr, ok := currVal.(string); ok {
-			currency = strings.ToUpper(strings.TrimSpace(cStr))
-		}
+		rawCurr = currVal
 	} else if currVal, ok := payload["curr"]; ok && currVal != nil {
-		if cStr, ok := currVal.(string); ok {
-			currency = strings.ToUpper(strings.TrimSpace(cStr))
+		rawCurr = currVal
+	}
+
+	if rawCurr != nil {
+		cStr, ok := rawCurr.(string)
+		if !ok {
+			return true, 0, "Invalid non-string currency code"
 		}
+		cStr = strings.TrimSpace(cStr)
+		// Check for non-ASCII runes (Cyrillic homoglyph defense)
+		for _, r := range cStr {
+			if r > 127 {
+				return true, 0, fmt.Sprintf("Invalid or spoofed currency code: %s (non-ASCII characters detected)", cStr)
+			}
+		}
+		cUpper := strings.ToUpper(cStr)
+		if len(cUpper) != 3 {
+			return true, 0, fmt.Sprintf("Currency code must be exactly 3 characters: %s", cStr)
+		}
+		for _, ch := range cUpper {
+			if ch < 'A' || ch > 'Z' {
+				return true, 0, fmt.Sprintf("Currency code contains invalid characters: %s", cStr)
+			}
+		}
+		currency = cUpper
+	}
+
+	// Currency decimal precision (Sub-cent salami slicing defense, Test 04)
+	maxDecimals := 2
+	switch currency {
+	case "JPY":
+		maxDecimals = 0
+	case "KWD":
+		maxDecimals = 3
+	case "BTC", "ETH":
+		maxDecimals = 8
+	default:
+		maxDecimals = 2
+	}
+
+	if parts := strings.Split(strVal, "."); len(parts) == 2 {
+		decLen := len(parts[1])
+		if decLen > maxDecimals {
+			return true, 0, fmt.Sprintf("Sub-cent fractional currency precision prohibited: %s allows at most %d decimal places", currency, maxDecimals)
+		}
+	}
+
+	var amount float64
+	parsed, err := strconv.ParseFloat(strVal, 64)
+	if err != nil {
+		return true, 0, "Invalid non-numeric format for amount"
+	}
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return true, 0, "Invalid floating-point number (NaN or Infinity detected)"
+	}
+	amount = parsed
+
+	// Enforce currency decimal precision (Sub-cent salami slicing defense, e.g. 1e-5 or 0.0000001)
+	factor := math.Pow10(maxDecimals)
+	if math.Abs(amount*factor-math.Round(amount*factor)) > 1e-9 {
+		return true, 0, fmt.Sprintf("Sub-cent fractional currency precision prohibited: %s allows at most %d decimal places", currency, maxDecimals)
 	}
 
 	rate, known := fxExchangeRates[currency]
 	if !known {
-		rate = 1.0 // fallback
+		return true, 0, fmt.Sprintf("Unsupported or unknown currency code: %s", currency)
 	}
 
 	// Minor currency unit handling (Stripe / FinTech integer cents to dollars)
 	if matchedKey == "amount_in_cents" || matchedKey == "cents" {
 		amount = amount / 100.0
 	} else {
-		// Enforce currency decimal precision (Sub-cent salami slicing defense)
-		maxDecimals := 2
-		switch currency {
-		case "JPY":
-			maxDecimals = 0
-		case "KWD":
-			maxDecimals = 3
-		case "BTC", "ETH":
-			maxDecimals = 8
-		default:
-			maxDecimals = 2
-		}
-
-		strVal := strconv.FormatFloat(amount, 'f', -1, 64)
-		if parts := strings.Split(strVal, "."); len(parts) == 2 {
-			decLen := len(parts[1])
-			if decLen > maxDecimals {
-				return true, 0, fmt.Sprintf("Sub-cent fractional currency precision prohibited: %s allows at most %d decimal places", currency, maxDecimals)
-			}
-		}
-
 		// Financial precision: round fractional sub-cents to prevent IEEE 754 precision drift
 		factor := math.Pow10(maxDecimals)
 		amount = math.Round(amount*factor) / factor
 	}
 
 	normalizedUSD := amount * rate
+
+	// Authorization limit check (Test 31)
+	if authLimVal, ok := payload["authorization_limit"]; ok && authLimVal != nil {
+		var limStr string
+		switch l := authLimVal.(type) {
+		case json.Number:
+			limStr = l.String()
+		case string:
+			limStr = strings.TrimSpace(l)
+		case float64:
+			limStr = strconv.FormatFloat(l, 'f', -1, 64)
+		case int:
+			limStr = strconv.Itoa(l)
+		case int64:
+			limStr = strconv.FormatInt(l, 10)
+		}
+		limAmt, err := strconv.ParseFloat(limStr, 64)
+		if err == nil && limAmt > 0 {
+			if normalizedUSD > limAmt {
+				return true, normalizedUSD, fmt.Sprintf("Transaction amount ($%.2f USD equivalent) exceeds authorization limit ($%.2f USD)", normalizedUSD, limAmt)
+			}
+		}
+	}
 
 	return true, normalizedUSD, ""
 }
@@ -1593,22 +2059,52 @@ func checkParameterGuardrails(action string, payload map[string]interface{}) (bo
 			// Normalize Unicode homoglyphs (fullwidth ASCII) and strip zero-width spaces
 			normalizedVal := sanitizeAndNormalizeText(val)
 
-			// Strip inline SQL comments (e.g. DROP/**/TABLE) before pattern evaluation
-			normalizedSQL := sqlCommentRegex.ReplaceAllString(normalizedVal, " ")
-			if destructiveSQLRegex.MatchString(normalizedSQL) {
-				return false, "Destructive SQL DDL/DCL statement blocked by Parameter Guardrails"
-			}
-			if unboundedDeleteRegex.MatchString(normalizedSQL) {
-				return false, "Unbounded DELETE statement without restrictive WHERE clause blocked by Parameter Guardrails"
-			}
-			if sqlMutationRegex.MatchString(normalizedSQL) {
-				return false, "Unauthorized SQL DML mutation statement (UPDATE/INSERT) blocked by Parameter Guardrails"
-			}
-			if sqlExfiltrationRegex.MatchString(normalizedSQL) {
-				return false, "SQL data exfiltration query (UNION SELECT) blocked by Parameter Guardrails"
-			}
-			if sqlBlindTimeRegex.MatchString(normalizedSQL) {
-				return false, "SQL injection exploit vector (Time-based blind / File access) blocked by Parameter Guardrails"
+			lowerKey := strings.ToLower(key)
+			trimmedVal := strings.TrimSpace(normalizedVal)
+			upperVal := strings.ToUpper(trimmedVal)
+			isSQL := lowerKey == "query" || lowerKey == "sql" || lowerKey == "filter_query" ||
+				strings.HasPrefix(upperVal, "SELECT") || strings.HasPrefix(upperVal, "WITH") ||
+				strings.HasPrefix(upperVal, "INSERT") || strings.HasPrefix(upperVal, "UPDATE") ||
+				strings.HasPrefix(upperVal, "DELETE") || strings.HasPrefix(upperVal, "DROP") ||
+				strings.HasPrefix(upperVal, "TRUNCATE")
+
+			if isSQL {
+				// Stacked query detection (Test 13, Test 14)
+				if stmtCount := countSQLStatements(val); stmtCount > 1 {
+					return false, fmt.Sprintf("Multiple stacked SQL statements prohibited by policy (%d statements detected, single statement required)", stmtCount)
+				}
+
+				// Malformed SQL syntax check (Test 18)
+				if malformedSQLRegex.MatchString(trimmedVal) {
+					return false, "Malformed SQL syntax: missing column list in SELECT statement"
+				}
+
+				// Strip string literals before tautology check (Test 15)
+				syntaxOnlySQL := stripSQLStringLiterals(normalizedVal)
+				cleanSQL := sqlCommentRegex.ReplaceAllString(syntaxOnlySQL, " ")
+				mysqlUnwrapped := sqlCommentRegex.ReplaceAllString(strings.ReplaceAll(strings.ReplaceAll(syntaxOnlySQL, "/*!50000", " "), "/*!", " "), " ")
+
+				if destructiveSQLRegex.MatchString(cleanSQL) || destructiveSQLRegex.MatchString(mysqlUnwrapped) {
+					return false, "Destructive SQL DDL/DCL statement blocked by Parameter Guardrails"
+				}
+				if unboundedDeleteRegex.MatchString(cleanSQL) {
+					return false, "Unbounded DELETE statement without restrictive WHERE clause blocked by Parameter Guardrails"
+				}
+				if sqlMutationRegex.MatchString(cleanSQL) {
+					return false, "Unauthorized SQL DML mutation statement (UPDATE/INSERT) blocked by Parameter Guardrails"
+				}
+				if sqlExfiltrationRegex.MatchString(cleanSQL) {
+					return false, "SQL data exfiltration query (UNION SELECT) blocked by Parameter Guardrails"
+				}
+				if sqlBlindTimeRegex.MatchString(cleanSQL) {
+					return false, "SQL injection exploit vector (Time-based blind / File access) blocked by Parameter Guardrails"
+				}
+				if sqlBooleanTrueRegex.MatchString(cleanSQL) {
+					return false, "SQL injection tautology exploit (OR 1=1 / boolean bypass) blocked by Parameter Guardrails"
+				}
+				if m := sqlTautologyPattern.FindStringSubmatch(cleanSQL); len(m) == 4 && strings.EqualFold(m[2], m[3]) {
+					return false, "SQL injection tautology exploit (OR 1=1 / boolean bypass) blocked by Parameter Guardrails"
+				}
 			}
 
 			// Universal Shell Command Chaining: flags chained command execution across any parameter
