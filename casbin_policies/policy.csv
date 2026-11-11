@@ -7,18 +7,38 @@ p, credit_tier, CREDIT_INCREASE, execute
 p, general_tier, TRANSFER, execute
 p, general_tier, WITHDRAW, execute
 p, general_tier, LOGIN, execute
+p, general_tier, Generate_Itinerary_PDF, execute
+p, general_tier, GENERATE_ITINERARY_PDF, execute
 p, fraud_tier, Lock_Card, execute
 p, fraud_tier, LOCK_CARD, execute
 p, query_tier, QUERY_DATABASE, execute
+p, query_tier, Execute_SQL, execute
+p, query_tier, EXECUTE_SQL, execute
+p, query_tier, Query_Ledger, execute
+p, query_tier, QUERY_LEDGER, execute
+p, dispute_tier, Review_Dispute, execute
+p, dispute_tier, REVIEW_DISPUTE, execute
+p, dispute_tier, Create_Dispute_Summary, execute
+p, dispute_tier, CREATE_DISPUTE_SUMMARY, execute
+p, finance_tier, Process_Payment, execute
+p, finance_tier, PROCESS_PAYMENT, execute
+p, finance_tier, Authorize_Transaction, execute
+p, finance_tier, AUTHORIZE_TRANSACTION, execute
+p, refund_tier, Authorize_Transaction, execute
+p, refund_tier, AUTHORIZE_TRANSACTION, execute
 
 # Map specific agents to roles
 g, ag_Travel_Bot, refund_tier
 g, ag_Travel_Bot, general_tier
+g, ag_Travel_Bot, finance_tier
+g, ag_Finance_Test, finance_tier
 g, ag_Dispute_AI, refund_tier
 g, ag_Dispute_AI, credit_tier
 g, ag_Dispute_AI, general_tier
 g, ag_Dispute_AI, query_tier
+g, ag_Dispute_AI, dispute_tier
 g, ag_Fraud_Bot, fraud_tier
+g, ag_Database_Test, query_tier
 g, ag_Rogue_Sim, refund_tier
 g, ag_Admin, refund_tier
 g, ag_Admin, credit_tier
