@@ -497,6 +497,8 @@ def run_guarded_paypal_agent(
                 "payload": payload_for_gateway,
                 "decision": sentinel_verdict["decision"],
                 "wal_hash": sentinel_verdict.get("wal_hash"),
+                "prompt": prompt,
+                "message": sentinel_verdict.get("message") or paypal_result.get("message") or "",
                 "paypal_id": (
                     paypal_result.get("payout_batch_id")
                     or paypal_result.get("order_id")

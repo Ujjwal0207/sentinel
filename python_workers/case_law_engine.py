@@ -12,10 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 from sklearn.neighbors import NearestNeighbors
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import math
 import collections
+import re
 
 # Ensure sibling modules resolve cleanly regardless of working directory
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,17 +31,20 @@ except ImportError:
 
 from paypal_sandbox import PayPalSandboxClient
 from gemini_agent import DEFAULT_GEMINI_MODEL, run_guarded_paypal_agent
+from elastic_audit import ElasticAuditClient, search_in_memory_fallback
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI(title="SENTINEL Case Law Engine", version="1.0")
 
-# Add CORS Middleware to allow React dashboard to connect
+# Add CORS Middleware to allow React dashboard to connect cleanly (local + Render)
+_raw_cors = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+_cors_origins = [o.strip() for o in _raw_cors.split(",") if o.strip()] if _raw_cors and _raw_cors != "*" else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to the dashboard URL
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=(_cors_origins != ["*"]),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -646,28 +650,75 @@ def _format_log_amount(payload: dict) -> str:
         return str(raw_amount)
 
 
+def _extract_amount_usd(payload: dict) -> float:
+    raw_amount = payload.get("amount") if isinstance(payload, dict) else None
+    if raw_amount is None or raw_amount == "" or raw_amount == "N/A":
+        return 0.0
+    try:
+        if isinstance(raw_amount, str):
+            return max(0.0, float(raw_amount.replace("$", "").replace(",", "").strip()))
+        return max(0.0, float(raw_amount))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _sanitize_public_log(item: dict) -> dict:
+    return {k: v for k, v in item.items() if not str(k).startswith("_")}
+
+
 def record_live_audit_log(entry: dict):
     global _LIVE_LOG_SEQ, _LAST_LIVE_HASH
     payload = entry.get("payload") or {}
     wal_hash = entry.get("wal_hash")
+    action = entry.get("action", "UNKNOWN")
+    agent = entry.get("agent", "ag_Unknown")
+    decision = entry.get("decision", "DENY")
+    feature_vec = [float(x) for x in vectorize_transaction(action, payload).tolist()]
+
     with _LIVE_LOG_LOCK:
         _LIVE_LOG_SEQ += 1
+        seq_id = _LIVE_LOG_SEQ
         if not wal_hash:
-            digest_input = f"{_LAST_LIVE_HASH}|{entry.get('agent')}|{entry.get('action')}|{json.dumps(payload, sort_keys=True, default=str)}|{entry.get('decision')}"
+            digest_input = f"{_LAST_LIVE_HASH}|{agent}|{action}|{json.dumps(payload, sort_keys=True, default=str)}|{decision}"
             wal_hash = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
         _LAST_LIVE_HASH = wal_hash
+        display_time = datetime.now().strftime("%I:%M:%S %p")
         item = {
-            "id": _LIVE_LOG_SEQ,
-            "time": datetime.now().strftime("%I:%M:%S %p"),
-            "agent": entry.get("agent", "ag_Unknown"),
-            "action": entry.get("action", "UNKNOWN"),
+            "id": seq_id,
+            "time": display_time,
+            "agent": agent,
+            "action": action,
             "amount": _format_log_amount(payload),
-            "decision": entry.get("decision", "DENY"),
+            "decision": decision,
             "hash": wal_hash[:12] + "...",
+            "_vector": feature_vec,
         }
         if entry.get("paypal_id"):
             item["paypal_id"] = entry["paypal_id"]
+        if entry.get("message"):
+            item["message"] = entry["message"]
         LIVE_AUDIT_LOGS.appendleft(item)
+
+    # Forward telemetry + 6D behavioral vector to Elasticsearch SIEM when configured
+    es_client = ElasticAuditClient()
+    if es_client.is_configured():
+        es_doc = {
+            "event_id": f"evt-{seq_id}-{wal_hash[:10]}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "display_time": display_time,
+            "agent_id": agent,
+            "action": action,
+            "decision": decision,
+            "amount": _format_log_amount(payload),
+            "amount_usd": _extract_amount_usd(payload),
+            "wal_hash": wal_hash,
+            "paypal_id": entry.get("paypal_id"),
+            "prompt": entry.get("prompt") or (payload.get("prompt") if isinstance(payload, dict) else None),
+            "message": entry.get("message") or "",
+            "payload": payload if isinstance(payload, dict) else {},
+            "feature_vector": feature_vec,
+        }
+        es_client.index_audit_event(es_doc)
 
 
 def _sync_gateway_fleet_freeze(frozen: bool):
@@ -774,19 +825,134 @@ def get_logs():
             
         cursor.close()
         with _LIVE_LOG_LOCK:
-            live_events = [item for item in LIVE_AUDIT_LOGS if item.get("action") != "INIT_GENESIS_BLOCK"]
+            live_events = [_sanitize_public_log(item) for item in LIVE_AUDIT_LOGS if item.get("action") != "INIT_GENESIS_BLOCK"]
         if logs:
             combined = live_events + logs
-            return combined[:15]
+            return combined[:25]
         with _LIVE_LOG_LOCK:
-            return list(LIVE_AUDIT_LOGS)[:15]
+            return [_sanitize_public_log(item) for item in list(LIVE_AUDIT_LOGS)[:25]]
     except Exception as e:
         logging.info(f"PostgreSQL offline for /api/logs ({e}); serving live in-memory audit buffer.")
         with _LIVE_LOG_LOCK:
-            return list(LIVE_AUDIT_LOGS)[:15]
+            return [_sanitize_public_log(item) for item in list(LIVE_AUDIT_LOGS)[:25]]
     finally:
         if conn:
             release_db_connection(conn)
+
+
+@app.get("/")
+def root_info():
+    return {
+        "service": "SENTINEL Case Law & PayPal Sandbox Orchestrator",
+        "status": "ok",
+        "endpoints": ["/health", "/api/integrations/status", "/api/agent/execute", "/api/logs", "/api/audit/search"],
+    }
+
+
+@app.get("/health")
+def health_check():
+    """Fast Render/Kubernetes liveness & readiness probe."""
+    return {
+        "status": "ok",
+        "service": "sentinel-api",
+        "fleet_frozen": get_fleet_frozen(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_search_vector(q: str, ref_action: str, ref_amount: Optional[float]) -> list:
+    resolved_action = (ref_action or "").strip().upper()
+    if not resolved_action:
+        q_upper = (q or "").upper()
+        for candidate in ("PAYPAL_PAYOUT", "PAYPAL_CREATE_ORDER", "PAYPAL_REFUND", "TRANSFER", "ISSUE_REFUND", "CREDIT_INCREASE"):
+            if candidate in q_upper:
+                resolved_action = candidate
+                break
+        if not resolved_action:
+            if "ORDER" in q_upper:
+                resolved_action = "PAYPAL_CREATE_ORDER"
+            elif "REFUND" in q_upper:
+                resolved_action = "PAYPAL_REFUND"
+            else:
+                resolved_action = "PAYPAL_PAYOUT"
+
+    resolved_amount = ref_amount
+    if resolved_amount is None:
+        m = re.search(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)", q or "")
+        if m:
+            try:
+                resolved_amount = float(m.group(1).replace(",", ""))
+            except ValueError:
+                resolved_amount = 50000.0
+        else:
+            resolved_amount = 50000.0
+
+    vec = vectorize_transaction(resolved_action, {"amount": resolved_amount, "prompt": q or ""})
+    return [float(x) for x in vec.tolist()]
+
+
+@app.get("/api/audit/search")
+def search_audit_logs(
+    q: str = "",
+    decision: str = "",
+    agent_id: str = "",
+    mode: str = "text",
+    ref_action: str = "",
+    ref_amount: Optional[float] = None,
+    limit: int = 25,
+):
+    """
+    Searches SENTINEL audit events via Elasticsearch (`sentinel-audit-events` SIEM full-text
+    or 6D `dense_vector` kNN similarity) with automatic live in-memory fallback.
+    """
+    search_mode = (mode or "text").strip().lower()
+    query_vec = _build_search_vector(q, ref_action, ref_amount) if search_mode == "knn" else None
+
+    es_client = ElasticAuditClient()
+    if es_client.is_configured():
+        try:
+            res = es_client.search_audit_events(
+                query=q,
+                decision=decision,
+                agent_id=agent_id,
+                query_vector=query_vec,
+                size=limit,
+            )
+            if query_vec is not None:
+                res["query_vector"] = [round(v, 4) for v in query_vec]
+            return res
+        except Exception as exc:
+            logging.warning(f"Elasticsearch search failed ({exc}); falling back to in-memory buffer.")
+            with _LIVE_LOG_LOCK:
+                snapshot = [dict(item) for item in LIVE_AUDIT_LOGS]
+            fallback = search_in_memory_fallback(
+                records=snapshot,
+                query=q,
+                decision=decision,
+                agent_id=agent_id,
+                query_vector=query_vec,
+                vectorize_fn=vectorize_transaction,
+                size=limit,
+            )
+            fallback["warning"] = f"Elasticsearch query error: {exc}"
+            if query_vec is not None:
+                fallback["query_vector"] = [round(v, 4) for v in query_vec]
+            return fallback
+
+    with _LIVE_LOG_LOCK:
+        snapshot = [dict(item) for item in LIVE_AUDIT_LOGS]
+    fallback = search_in_memory_fallback(
+        records=snapshot,
+        query=q,
+        decision=decision,
+        agent_id=agent_id,
+        query_vector=query_vec,
+        vectorize_fn=vectorize_transaction,
+        size=limit,
+    )
+    if query_vec is not None:
+        fallback["query_vector"] = [round(v, 4) for v in query_vec]
+    return fallback
 
 
 class AgentExecuteRequest(BaseModel):
@@ -808,7 +974,7 @@ class AgentExecuteRequest(BaseModel):
 
 @app.get("/api/integrations/status")
 def get_integrations_status(verify: bool = False):
-    """Reports live readiness for Google Gemini, Go Edge Gateway, and PayPal Developer Sandbox."""
+    """Reports live readiness for Google Gemini, Go Edge Gateway, PayPal Sandbox, and Elasticsearch."""
     gemini_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
     gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
 
@@ -835,6 +1001,8 @@ def get_integrations_status(verify: bool = False):
     except Exception as e:
         gateway_status["error"] = str(e)
 
+    es_status = ElasticAuditClient().check_health()
+
     return {
         "fleet_frozen": get_fleet_frozen(),
         "gemini": {
@@ -843,6 +1011,7 @@ def get_integrations_status(verify: bool = False):
         },
         "paypal": paypal_status,
         "gateway": gateway_status,
+        "elastic": es_status,
     }
 
 
