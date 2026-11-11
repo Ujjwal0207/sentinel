@@ -1,15 +1,35 @@
 import logging
+import os
+import sys
+import hashlib
+import threading
 import psycopg2
 import psycopg2.pool
 import numpy as np
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Any, Dict, Optional
 from sklearn.neighbors import NearestNeighbors
 from datetime import datetime
 import json
 import math
 import collections
+
+# Ensure sibling modules resolve cleanly regardless of working directory
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(_THIS_DIR), ".env"))
+except ImportError:
+    pass
+
+from paypal_sandbox import PayPalSandboxClient
+from gemini_agent import DEFAULT_GEMINI_MODEL, run_guarded_paypal_agent
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -51,7 +71,8 @@ def get_db_pool():
                 port=DB_PORT,
                 database=DB_NAME,
                 user=DB_USER,
-                password=DB_PASS
+                password=DB_PASS,
+                connect_timeout=1,
             )
         except Exception as e:
             logging.warning(f"Could not initialize connection pool: {e}")
@@ -70,7 +91,8 @@ def get_db_connection():
         port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
-        password=DB_PASS
+        password=DB_PASS,
+        connect_timeout=1,
     )
 
 def release_db_connection(conn):
@@ -120,8 +142,11 @@ def ensure_audit_table():
 # parameter entropy (obfuscation/injection detection), payload complexity, and action risk weight.
 ACTION_MAP = {
     "TRANSFER": 0,
+    "PAYPAL_PAYOUT": 0,
+    "PAYPAL_CREATE_ORDER": 0,
     "REFUND": 1,
     "ISSUE_REFUND": 1,
+    "PAYPAL_REFUND": 1,
     "CREDIT_INCREASE": 2,
     "LOCK_CARD": 3,
     "LOGIN": 4,
@@ -130,9 +155,12 @@ ACTION_MAP = {
 
 ACTION_RISK_WEIGHTS = {
     "TRANSFER": 0.9,
+    "PAYPAL_PAYOUT": 0.85,
+    "PAYPAL_CREATE_ORDER": 0.5,
     "CREDIT_INCREASE": 0.8,
     "ISSUE_REFUND": 0.5,
     "REFUND": 0.5,
+    "PAYPAL_REFUND": 0.55,
     "LOCK_CARD": 0.3,
     "LOGIN": 0.2,
     "WITHDRAW": 0.8,
@@ -432,6 +460,12 @@ def evaluate_case(request: EvaluateRequest):
     """
     # 1. Circuit Breaker: Kill Switch enforcement (Highest Priority)
     if get_fleet_frozen():
+        record_live_audit_log({
+            "agent": request.agent_id,
+            "action": request.action,
+            "payload": request.payload,
+            "decision": "DENY",
+        })
         return {
             "status": "FROZEN",
             "decision": "DENY",
@@ -450,6 +484,12 @@ def evaluate_case(request: EvaluateRequest):
         if len(AGENT_HISTORY[request.agent_id]) > 20:
             AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
         logging.warning(f"🛑 {request.agent_id} BLOCKED by Trust Economy quarantine (Budget: {current_budget:.1f}%)")
+        record_live_audit_log({
+            "agent": request.agent_id,
+            "action": request.action,
+            "payload": request.payload,
+            "decision": "DENY",
+        })
         return {
             "status": "QUARANTINED",
             "decision": "DENY",
@@ -467,6 +507,12 @@ def evaluate_case(request: EvaluateRequest):
         AGENT_HISTORY[request.agent_id].append(target_vector[0])
         if len(AGENT_HISTORY[request.agent_id]) > 20:
             AGENT_HISTORY[request.agent_id] = AGENT_HISTORY[request.agent_id][-20:]
+        record_live_audit_log({
+            "agent": request.agent_id,
+            "action": request.action,
+            "payload": request.payload,
+            "decision": "ALLOW",
+        })
         return {
             "status": "FALLBACK",
             "decision": "ALLOW",
@@ -521,7 +567,14 @@ def evaluate_case(request: EvaluateRequest):
         set_agent_budget(request.agent_id, new_budget)
         if old_budget < 100.0:
             logging.info(f"💚 Trust replenished for {request.agent_id}: {old_budget:.1f}% → {new_budget:.1f}%")
-    
+
+    record_live_audit_log({
+        "agent": request.agent_id,
+        "action": request.action,
+        "payload": request.payload,
+        "decision": final_decision,
+    })
+
     return {
         "status": "SUCCESS",
         "decision": final_decision,
@@ -559,6 +612,74 @@ def get_trust_economy():
         "budgets": current_budgets
     }
 
+# In-memory live audit log ring buffer (ensures real-time dashboard visibility even when PostgreSQL is offline)
+_GENESIS_HASH = hashlib.sha256(b"SENTINEL_GENESIS_BLOCK").hexdigest()
+_LIVE_LOG_LOCK = threading.Lock()
+LIVE_AUDIT_LOGS = collections.deque(
+    [
+        {
+            "id": 1000001,
+            "time": datetime.now().strftime("%I:%M:%S %p"),
+            "agent": "SYSTEM",
+            "action": "INIT_GENESIS_BLOCK",
+            "amount": "N/A",
+            "decision": "ALLOW",
+            "hash": _GENESIS_HASH[:12] + "...",
+        }
+    ],
+    maxlen=50,
+)
+_LIVE_LOG_SEQ = 1000001
+_LAST_LIVE_HASH = _GENESIS_HASH
+
+
+def _format_log_amount(payload: dict) -> str:
+    raw_amount = payload.get("amount") if isinstance(payload, dict) else None
+    if raw_amount is None or raw_amount == "N/A" or raw_amount == "":
+        return "N/A"
+    try:
+        if isinstance(raw_amount, str):
+            cleaned = raw_amount.replace("$", "").replace(",", "").strip()
+            return f"${float(cleaned):,.2f}"
+        return f"${float(raw_amount):,.2f}"
+    except (ValueError, TypeError):
+        return str(raw_amount)
+
+
+def record_live_audit_log(entry: dict):
+    global _LIVE_LOG_SEQ, _LAST_LIVE_HASH
+    payload = entry.get("payload") or {}
+    wal_hash = entry.get("wal_hash")
+    with _LIVE_LOG_LOCK:
+        _LIVE_LOG_SEQ += 1
+        if not wal_hash:
+            digest_input = f"{_LAST_LIVE_HASH}|{entry.get('agent')}|{entry.get('action')}|{json.dumps(payload, sort_keys=True, default=str)}|{entry.get('decision')}"
+            wal_hash = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+        _LAST_LIVE_HASH = wal_hash
+        item = {
+            "id": _LIVE_LOG_SEQ,
+            "time": datetime.now().strftime("%I:%M:%S %p"),
+            "agent": entry.get("agent", "ag_Unknown"),
+            "action": entry.get("action", "UNKNOWN"),
+            "amount": _format_log_amount(payload),
+            "decision": entry.get("decision", "DENY"),
+            "hash": wal_hash[:12] + "...",
+        }
+        if entry.get("paypal_id"):
+            item["paypal_id"] = entry["paypal_id"]
+        LIVE_AUDIT_LOGS.appendleft(item)
+
+
+def _sync_gateway_fleet_freeze(frozen: bool):
+    gateway_enforce_url = os.getenv("SENTINEL_GATEWAY_URL", "http://localhost:8080/enforce").strip()
+    base = gateway_enforce_url.rsplit("/enforce", 1)[0]
+    endpoint = f"{base}/v1/fleet/freeze" if frozen else f"{base}/v1/fleet/resume"
+    try:
+        requests.post(endpoint, timeout=1.5)
+    except Exception as e:
+        logging.debug(f"Go gateway freeze sync skipped ({endpoint}): {e}")
+
+
 # --- Kill Switch Endpoints (Issue #35) ---
 @app.post("/api/kill-switch")
 def activate_kill_switch():
@@ -567,6 +688,7 @@ def activate_kill_switch():
     All subsequent /evaluate calls will be hard-denied until resumed.
     """
     set_fleet_frozen(True)
+    _sync_gateway_fleet_freeze(True)
     logging.critical("🛑 FLEET KILL SWITCH ACTIVATED by operator. All agent actions HARD-DENIED.")
     return {
         "status": "FROZEN",
@@ -579,10 +701,24 @@ def resume_fleet():
     Resumes fleet operations after a kill switch activation.
     """
     set_fleet_frozen(False)
+    _sync_gateway_fleet_freeze(False)
     logging.info("✅ Fleet operations RESUMED by operator.")
     return {
         "status": "ACTIVE",
         "message": "Fleet resumed. Agent transactions will be evaluated normally."
+    }
+
+@app.post("/api/trust-economy/reset")
+def reset_trust_economy():
+    """Restores registered agent trust budgets to 100.0% and clears sliding history."""
+    AGENT_HISTORY.clear()
+    all_keys = set(list(AGENT_BUDGETS.keys()) + INITIAL_AGENTS)
+    for agent in all_keys:
+        set_agent_budget(agent, 100.0)
+    return {
+        "status": "RESET",
+        "fleet_budget": 100.0,
+        "budgets": {agent: 100.0 for agent in all_keys},
     }
 
 @app.post("/refresh")
@@ -593,7 +729,7 @@ def refresh_precedents():
 
 @app.get("/api/logs")
 def get_logs():
-    """Fetches the latest 15 cryptographic logs for the React dashboard."""
+    """Fetches the latest 15 cryptographic logs (PostgreSQL when online, live in-memory buffer fallback)."""
     conn = None
     try:
         conn = get_db_connection()
@@ -618,18 +754,7 @@ def get_logs():
             elif not isinstance(payload, dict):
                 payload = {}
                 
-            raw_amount = payload.get("amount")
-            if raw_amount is None or raw_amount == "N/A" or raw_amount == "":
-                amount = "N/A"
-            else:
-                try:
-                    if isinstance(raw_amount, str):
-                        cleaned = raw_amount.replace("$", "").replace(",", "").strip()
-                        amount = f"${float(cleaned):,.2f}"
-                    else:
-                        amount = f"${float(raw_amount):,.2f}"
-                except (ValueError, TypeError):
-                    amount = str(raw_amount)
+            amount = _format_log_amount(payload)
                 
             # Format time nicely for the dashboard
             if hasattr(timestamp_val, "strftime"):
@@ -648,13 +773,180 @@ def get_logs():
             })
             
         cursor.close()
-        return logs
+        with _LIVE_LOG_LOCK:
+            live_events = [item for item in LIVE_AUDIT_LOGS if item.get("action") != "INIT_GENESIS_BLOCK"]
+        if logs:
+            combined = live_events + logs
+            return combined[:15]
+        with _LIVE_LOG_LOCK:
+            return list(LIVE_AUDIT_LOGS)[:15]
     except Exception as e:
-        logging.error(f"Failed to fetch logs: {e}")
-        raise HTTPException(status_code=500, detail="Database connection failed")
+        logging.info(f"PostgreSQL offline for /api/logs ({e}); serving live in-memory audit buffer.")
+        with _LIVE_LOG_LOCK:
+            return list(LIVE_AUDIT_LOGS)[:15]
     finally:
         if conn:
             release_db_connection(conn)
+
+
+class AgentExecuteRequest(BaseModel):
+    prompt: str
+    agent_id: str = "ag_Travel_Bot"
+    mandate_max_amount: Optional[float] = None
+    mandate_currency: str = "USD"
+    mandate_recipient: Optional[str] = None
+    mandate_authorized_action: Optional[str] = None
+    data_origin: Optional[str] = None
+    force_tool: Optional[str] = None
+    force_args: Optional[Dict[str, Any]] = None
+    dry_run_paypal: bool = False
+    gemini_api_key: Optional[str] = None
+    gemini_model: Optional[str] = None
+    paypal_client_id: Optional[str] = None
+    paypal_client_secret: Optional[str] = None
+
+
+@app.get("/api/integrations/status")
+def get_integrations_status(verify: bool = False):
+    """Reports live readiness for Google Gemini, Go Edge Gateway, and PayPal Developer Sandbox."""
+    gemini_key = (os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
+    gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+    pp_client = PayPalSandboxClient()
+    if verify and pp_client.is_configured():
+        paypal_status = pp_client.verify_connection()
+    else:
+        paypal_status = {
+            "configured": pp_client.is_configured(),
+            "connected": None,
+            "environment": pp_client.mode,
+            "base_url": pp_client.base_url,
+            "message": "Ready (call ?verify=true to test live OAuth2 token)" if pp_client.is_configured() else "Missing PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET",
+        }
+
+    gateway_enforce = os.getenv("SENTINEL_GATEWAY_URL", "http://localhost:8080/enforce").strip()
+    gateway_health = gateway_enforce.rsplit("/enforce", 1)[0] + "/health"
+    gateway_status = {"reachable": False, "url": gateway_health}
+    try:
+        r = requests.get(gateway_health, timeout=1.5)
+        if r.status_code == 200:
+            gateway_status["reachable"] = True
+            gateway_status["details"] = r.json()
+    except Exception as e:
+        gateway_status["error"] = str(e)
+
+    return {
+        "fleet_frozen": get_fleet_frozen(),
+        "gemini": {
+            "configured": bool(gemini_key),
+            "model": gemini_model,
+        },
+        "paypal": paypal_status,
+        "gateway": gateway_status,
+    }
+
+
+@app.post("/api/agent/execute")
+def execute_gemini_paypal_workflow(req: AgentExecuteRequest):
+    """
+    Executes an AI-driven commerce request end-to-end:
+      1. Google Gemini translates natural language -> PayPal Sandbox tool call
+      2. SENTINEL Go Edge Gateway verifies KYA, AP2 Mandate, guardrails & RBAC
+      3. PayPal Sandbox executes ONLY when SENTINEL returns ALLOW
+    """
+    # Respect Python Fleet Kill Switch & Trust Quarantine upfront as well
+    if get_fleet_frozen():
+        record_live_audit_log({
+            "agent": req.agent_id,
+            "action": "PAYPAL_AGENT_CALL",
+            "payload": {"prompt": req.prompt},
+            "decision": "DENY",
+        })
+        return {
+            "status": "FROZEN",
+            "decision": "DENY",
+            "gemini": {"model": req.gemini_model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)},
+            "sentinel": {
+                "decision": "DENY",
+                "status_code": 503,
+                "error": "FLEET_FROZEN",
+                "message": "Fleet kill switch active: all AI agent transactions are frozen.",
+            },
+            "paypal": {
+                "executed": False,
+                "environment": "sandbox",
+                "status": "BLOCKED_BY_KILL_SWITCH",
+            },
+        }
+
+    current_budget = get_agent_budget(req.agent_id)
+    if current_budget <= 20.0:
+        record_live_audit_log({
+            "agent": req.agent_id,
+            "action": "PAYPAL_AGENT_CALL",
+            "payload": {"prompt": req.prompt},
+            "decision": "DENY",
+        })
+        return {
+            "status": "QUARANTINED",
+            "decision": "DENY",
+            "gemini": {"model": req.gemini_model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)},
+            "sentinel": {
+                "decision": "DENY",
+                "status_code": 403,
+                "error": "TRUST_ECONOMY_QUARANTINED",
+                "message": f"Agent {req.agent_id} is quarantined (trust budget {current_budget:.1f}% <= 20.0%).",
+            },
+            "paypal": {
+                "executed": False,
+                "environment": "sandbox",
+                "status": "BLOCKED_BY_QUARANTINE",
+            },
+        }
+
+    override = None
+    if req.force_tool and req.force_args is not None:
+        override = (req.force_tool, req.force_args)
+
+    try:
+        result = run_guarded_paypal_agent(
+            prompt=req.prompt,
+            agent_id=req.agent_id,
+            mandate_max_amount=req.mandate_max_amount,
+            mandate_currency=req.mandate_currency,
+            mandate_recipient=req.mandate_recipient,
+            mandate_authorized_action=req.mandate_authorized_action,
+            data_origin=req.data_origin,
+            gemini_api_key=req.gemini_api_key,
+            gemini_model=req.gemini_model,
+            paypal_client_id=req.paypal_client_id,
+            paypal_client_secret=req.paypal_client_secret,
+            direct_tool_override=override,
+            dry_run_paypal=req.dry_run_paypal,
+            log_recorder=record_live_audit_log,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Sync Trust Economy contagion/replenishment with outcome
+    try:
+        gem_info = result.get("gemini") or {}
+        action_name = gem_info.get("sentinel_action") or "PAYPAL_PAYOUT"
+        args_payload = gem_info.get("arguments") or {}
+        vec = vectorize_transaction(action_name, args_payload)
+        AGENT_HISTORY[req.agent_id].append(vec)
+        if len(AGENT_HISTORY[req.agent_id]) > 20:
+            AGENT_HISTORY[req.agent_id] = AGENT_HISTORY[req.agent_id][-20:]
+
+        if result.get("decision") == "DENY":
+            apply_contagion(req.agent_id, vec)
+        elif result.get("decision") == "ALLOW":
+            old_budget = get_agent_budget(req.agent_id)
+            set_agent_budget(req.agent_id, min(100.0, old_budget + 1.5))
+    except Exception as e:
+        logging.warning(f"Trust economy sync warning: {e}")
+
+    return result
 
 @app.get("/api/verify-audit-chain")
 def verify_audit_chain():
