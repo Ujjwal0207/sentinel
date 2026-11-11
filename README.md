@@ -8,7 +8,7 @@
   <a href="#-pick-your-path"><img src="https://img.shields.io/badge/🎯_Start-Quick_Start-2563eb?style=for-the-badge" alt="Quick Start" /></a>
   <a href="#-interactive-api-playground"><img src="https://img.shields.io/badge/🧪_Try-API_Playground-7c3aed?style=for-the-badge" alt="API Playground" /></a>
   <a href="#-live-demo-scenarios"><img src="https://img.shields.io/badge/🎬_Watch-Demo_Scenarios-0ea5e9?style=for-the-badge" alt="Demo Scenarios" /></a>
-  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,034_Tests_100%25-059669?style=for-the-badge" alt="Benchmarks" /></a>
+  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,064_Test_Scenarios-059669?style=for-the-badge" alt="Benchmarks" /></a>
   <a href="#-implementation-status"><img src="https://img.shields.io/badge/✅_See-What's_Built-10b981?style=for-the-badge" alt="Status" /></a>
 </p>
 
@@ -33,7 +33,7 @@
 | 🎯 | [Pick Your Path](#-pick-your-path) | Judge demo · Developer setup · API explorer |
 | 🛡️ | [Why SENTINEL Exists](#-why-sentinel-exists) | The agentic security gap |
 | ⚡ | [Core Innovations](#-core-architectural-innovations) | Expandable deep-dives on each pillar (KYA, AP2, UCAN, Redis Lua) |
-| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 1,034-test scorecard & reproduction |
+| 📊 | [Benchmark Telemetry & Proof](#-benchmark-telemetry--empirical-proof) | Complete 1,064-test scorecard & reproduction |
 | 🔄 | [Decision Flow](#-how-a-decision-flows) | Live mermaid pipeline |
 | 🎬 | [Demo Scenarios](#-live-demo-scenarios) | Step-by-step "what happens when…" |
 | 🧪 | [API Playground](#-interactive-api-playground) | Copy-paste `curl` commands |
@@ -316,21 +316,22 @@ SENTINEL intercepts adversarial inputs across a 32-attribute semantic feature ve
 
 ## 📊 Benchmark Telemetry & Empirical Proof
 
-SENTINEL is continuously audited by an automated, enterprise-grade test and benchmark harness comprising **1,034 automated test assertions** running in **$< 0.30\text{ seconds}$** with a **100.00% pass rate, 0.00% False Positive Rate (FPR), 0.00% False Negative Rate (FNR), and 0.00% Ledger Fork Rate**:
+SENTINEL is validated by an automated Go test and micro-benchmark harness comprising **1,064 unit and scenario assertions** executing in **$< 0.35\text{ seconds}$**:
 
-| Benchmark Suite | Test File | Scenarios | Focus Vectors | Pass Rate | Mean Latency |
-| :--- | :--- | :---: | :--- | :---: | :---: |
-| **Phase 11 to 13 Enterprise Benchmark** | [`phase11_to_13_enterprise_benchmark_test.go`](gateway/phase11_to_13_enterprise_benchmark_test.go) | **150** | SPL Policy Parser, Multilingual Semantic Guard, Zero-Dependency Raft Mesh | **100.00%** | $12.4\,\mu\text{s}$ |
-| **Phase 5 to 10 Enterprise Benchmark** | [`phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) | **205** | MCP Proxy, 64D Vector Index, Multi-Tenancy, Compliance Exporter, SIEM Alerts, Adversarial | **100.00%** | $18.2\,\mu\text{s}$ |
-| **Phase 4 & 3.5 Enterprise Harsh Benchmark** | [`phase4_enterprise_harsh_benchmark_test.go`](gateway/phase4_enterprise_harsh_benchmark_test.go) | **205** | Zero-Loss Audit WAL, Partition Merkle Chains, Zero-Hop Engine, 32D Semantic Guard | **100.00%** | $31.4\,\mu\text{s}$ |
-| **Phase 3.3 & 3.4 Advanced Enterprise** | [`phase3_advanced_benchmark_test.go`](gateway/phase3_advanced_benchmark_test.go) | **150** | Ed25519 Key Theft, UCAN 1/2/3-Hop DAGs, 5-Pod Replay, Distributed Smurfing, Fleet Freeze | **100.00%** | $148.2\,\mu\text{s}$ |
-| **Phase 3.1 & 3.2 Enterprise Benchmark** | [`phase3_enterprise_benchmark_test.go`](gateway/phase3_enterprise_benchmark_test.go) | **140** | Transport Socket Pinning, TOCTOU DNS Rebinding, Google AP2 Intent Drift | **100.00%** | $14.5\,\mu\text{s}$ |
-| **Century Benchmark Suite** | [`century_benchmark_test.go`](gateway/century_benchmark_test.go) | **120** | Destructive SQL, Blind SQL, Shell Injection, FX Normalization, Parameter Bounds | **100.00%** | $23.5\,\mu\text{s}$ |
-| **Baseline Reality Check** | [`reality_check_test.go`](gateway/reality_check_test.go) | **32** | Core RBAC, Nonce Replay, Timestamps, Sub-Cent Precision, Financial Boundaries | **100.00%** | $36.2\,\mu\text{s}$ |
-| **Harsh Reality FinTech Vectors** | [`harsh_reality_test.go`](gateway/harsh_reality_test.go) | **12** | Adversarial Smurfing, Unicode Homoglyphs, Daemon Port Probing, Zero-Width Spaces | **100.00%** | $42.0\,\mu\text{s}$ |
-| **Deep Red-Team Evasions** | [`deep_redteam_test.go`](gateway/deep_redteam_test.go) | **5** | RFC 8259 Duplicate Keys, Concurrency Lock Contention, Sub-Cent Precision | **100.00%** | $18.5\,\mu\text{s}$ |
-| **Unit Test Suite** | [`main_test.go`](gateway/main_test.go) | **15** | Core Gateway Validation, Shell Chaining, AST-level tokenizing filters | **100.00%** | $< 10.0\,\mu\text{s}$ |
-| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **1,034** | **Zero Regressions Across All Enterprise Attack Vectors** | **100.00%** | **$26.4\,\mu\text{s}$** |
+| Benchmark Suite | Test File | Scenarios | Focus Vectors | Mean Latency |
+| :--- | :--- | :---: | :--- | :---: |
+| **Industry Readiness & Dual-Surface** | [`industry_readiness_benchmark_test.go`](gateway/industry_readiness_benchmark_test.go) | **30** | Stdio MCP Proxying, Offline Merkle WAL CLI, Dual-Surface Edge & SaaS Modes | $3.5\,\mu\text{s}$ |
+| **Phase 11 to 13 Enterprise Benchmark** | [`phase11_to_13_enterprise_benchmark_test.go`](gateway/phase11_to_13_enterprise_benchmark_test.go) | **150** | SPL Policy Parser, Multilingual Semantic Guard, Zero-Dependency Raft Mesh | $12.4\,\mu\text{s}$ |
+| **Phase 5 to 10 Enterprise Benchmark** | [`phase5_to_10_enterprise_benchmark_test.go`](gateway/phase5_to_10_enterprise_benchmark_test.go) | **205** | MCP Proxy, 64D Vector Index, Multi-Tenancy, Compliance Exporter, SIEM Alerts, Adversarial | $18.2\,\mu\text{s}$ |
+| **Phase 4 & 3.5 Enterprise Harsh Benchmark** | [`phase4_enterprise_harsh_benchmark_test.go`](gateway/phase4_enterprise_harsh_benchmark_test.go) | **205** | Zero-Loss Audit WAL, Partition Merkle Chains, Zero-Hop Engine, 32D Semantic Guard | $31.4\,\mu\text{s}$ |
+| **Phase 3.3 & 3.4 Advanced Enterprise** | [`phase3_advanced_benchmark_test.go`](gateway/phase3_advanced_benchmark_test.go) | **150** | Ed25519 Key Theft, UCAN 1/2/3-Hop DAGs, 5-Pod Replay, Distributed Smurfing, Fleet Freeze | $148.2\,\mu\text{s}$ |
+| **Phase 3.1 & 3.2 Enterprise Benchmark** | [`phase3_enterprise_benchmark_test.go`](gateway/phase3_enterprise_benchmark_test.go) | **140** | Transport Socket Pinning, TOCTOU DNS Rebinding, Google AP2 Intent Drift | $14.5\,\mu\text{s}$ |
+| **Century Benchmark Suite** | [`century_benchmark_test.go`](gateway/century_benchmark_test.go) | **120** | Destructive SQL, Blind SQL, Shell Injection, FX Normalization, Parameter Bounds | $23.5\,\mu\text{s}$ |
+| **Baseline Reality Check** | [`reality_check_test.go`](gateway/reality_check_test.go) | **32** | Core RBAC, Nonce Replay, Timestamps, Sub-Cent Precision, Financial Boundaries | $36.2\,\mu\text{s}$ |
+| **Harsh Reality FinTech Vectors** | [`harsh_reality_test.go`](gateway/harsh_reality_test.go) | **12** | Adversarial Smurfing, Unicode Homoglyphs, Daemon Port Probing, Zero-Width Spaces | $42.0\,\mu\text{s}$ |
+| **Deep Red-Team Evasions** | [`deep_redteam_test.go`](gateway/deep_redteam_test.go) | **5** | RFC 8259 Duplicate Keys, Concurrency Lock Contention, Sub-Cent Precision | $18.5\,\mu\text{s}$ |
+| **Unit Test Suite** | [`main_test.go`](gateway/main_test.go) | **15** | Core Gateway Validation, Shell Chaining, AST-level tokenizing filters | $< 10.0\,\mu\text{s}$ |
+| **TOTAL VERIFIED SUITE** | `go test -count=1 ./...` | **1,064** | **Full In-Process & Adversarial Vector Test Coverage** | **$26.4\,\mu\text{s}$** |
 
 ### 📈 Apple M5 Silicon Micro-Benchmark Telemetry
 
@@ -348,13 +349,15 @@ Empirically verified on Apple M5 hardware with sub-nanosecond hardware timers:
 | `BenchmarkMultiPartitionLedger_RecordEvent` | Phase 3.5 | **656.2 ns/op** | **0.66 µs** | 926 B/op (17 allocs) | **1,523,925 blocks / sec** |
 | `BenchmarkMultilingualGuard_Inspect` | Phase 12 | **1,831.0 ns/op** | **1.83 µs** | 600 B/op (8 allocs) | **546,149 inspections / sec** |
 | `BenchmarkEpochMerkleTree_BuildTree` | Phase 3.5 | **2,598.0 ns/op** | **2.60 µs** | 5,432 B/op (76 allocs) | **384,911 epoch roots / sec** |
+| `BenchmarkStdioMCP_InterceptMessage` | Industry Prep | **3,519.0 ns/op** | **3.52 µs** | 3,640 B/op (80 allocs) | **284,171 MCP messages / sec** |
 | `BenchmarkMCPProxy_InterceptMessage` | Phase 5 | **3,605.0 ns/op** | **3.61 µs** | 3,688 B/op (79 allocs) | **277,392 MCP messages / sec** |
 | `BenchmarkDenseVector_VectorizeAndClassify` | Phase 6 | **5,450.0 ns/op** | **5.45 µs** | 560 B/op (5 allocs) | **183,486 classifications / sec** |
 | `BenchmarkSemanticGuard_InspectSemanticSafety` | Phase 4.2 | **31,435.0 ns/op** | **31.44 µs** | 2,265 B/op (18 allocs) | **31,811 deep scans / sec** |
+| `BenchmarkOfflineWAL_VerifyReader` (100 txns) | Industry Prep | **259,242.0 ns/op** | **259.2 µs** | 324,868 B/op (3,765 allocs) | **38,573 verified txns / sec** |
 
 ### How to Reproduce All Benchmarks
 
-Execute the entire 1,034-test suite with a single command:
+Execute the entire 1,064-test suite with a single command:
 
 ```bash
 cd gateway
@@ -672,17 +675,42 @@ Request arrives
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture: Dual-Surface Architecture
 
-| Service | Stack | Port | Role |
+SENTINEL operates on a **Dual-Surface Architecture** that cleanly decouples the ultra-low-latency **Edge Data Plane** (for Big Tech, MCP tool execution, and local sidecars) from the rich **Cloud Control Plane** (for Enterprise B2B SaaS management, dashboards, and compliance):
+
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                             SENTINEL DUAL-SURFACE ARCHITECTURE                         │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+    [ BIG TECH / EDGE EMBEDDED ]                       [ ENTERPRISE B2B SAAS ]
+    ============================                       =======================
+       THE EDGE DATA PLANE                               THE CLOUD CONTROL PLANE
+    (Pure Go, Zero-Dependency)                         (Dashboard, Analytics, Billing)
+                 │                                                   │
+                 ▼                                                   ▼
+┌─────────────────────────────────┐                 ┌─────────────────────────────────┐
+│     SENTINEL EDGE GATEWAY       │                 │     SENTINEL CLOUD SAAS         │
+│     (The Tool-Call Sensor)      │                 │     (The Management Console)    │
+│                                 │                 │                                 │
+│ • Pure Go, Single Binary        │                 │ • React Mission Control Web UI  │
+│ • Runs in < 35µs on localhost   │  Async Stream   │ • Multi-Tenant Team & Org Auth  │
+│ • Zero external dependencies    │────────────────▶│ • Centralized Policy Management │
+│ • Native Anthropic MCP Stdio/SSE│   (WAL / Kafka) │ • Fleet Contagion & Quarantine  │
+│ • Standalone Merkle WAL on Disk │                 │ • Big-4 SOC2 & EU AI Act Export │
+└─────────────────────────────────┘                 └─────────────────────────────────┘
+```
+
+### Services & Deployment Topology
+
+| Service | Stack | Port / Surface | Deployment Role |
 | :--- | :--- | :---: | :--- |
-| **Go Edge Gateway** | Go, Casbin, Kafka | `8080` | Sub-ms RBAC + Case Law delegation |
-| **Case Law Engine** | Python, FastAPI, scikit-learn | `8000` | k-NN, contagion, kill switch, API for dashboard |
-| **Audit Worker** | Python, psycopg2, Kafka | — | Hash-chain persistence |
-| **Mission Control** | React 18, Vite | `5173` | Trust gauge, logs, emergency stop |
-| **Traffic Simulator** | Python, requests | CLI | Multi-agent + rogue injection |
-| **Redpanda** | Kafka-compatible | `9092` | Zero-loss event bus |
-| **PostgreSQL + Redis** | Docker | `5432`, `6379` | Immutable ledger + fast state |
+| **Sentinel Edge Gateway** | Pure Go (`sentinel-gateway`) | `8080`, `stdio` | Zero-dependency line-speed tool gatekeeper, stdio MCP proxy, offline Merkle WAL |
+| **Case Law Engine** | Python, FastAPI, scikit-learn | `8000` | SaaS Control Plane: k-NN precedent clustering, dynamic contagion, kill switch API |
+| **Audit Worker** | Python, psycopg2, Kafka | Background Sink | SaaS Control Plane: Hash-chain persistence to relational data lake |
+| **Mission Control Dashboard** | React 18, Vite, Tailwind | `5173` | SaaS Control Plane: Trust economy gauge, live visual ledger, emergency fleet freeze |
+| **Redpanda / Kafka** | Kafka-compatible bus | `9092` | SaaS Control Plane: Zero-loss high-throughput asynchronous telemetry bus |
+| **PostgreSQL + Redis** | Relational + In-Memory | `5432`, `6379` | SaaS Control Plane: Multi-tenant relational persistence and Redis cluster mesh |
 
 <details>
 <summary><strong>🗺️ Expand: system topology (ASCII)</strong></summary>
@@ -729,7 +757,7 @@ Request arrives
 | **Dynamic Fleet Contagion & Quarantine** | ✅ | Mathematical blast-radius dampening & behavioral health scoring | [`python_workers/case_law_engine.py`](python_workers/case_law_engine.py) |
 | **SHA-256 Tamper-Evident Ledger** | ✅ | Immutable cryptographic hash chain committed to PostgreSQL via Kafka | [`python_workers/audit_worker.py`](python_workers/audit_worker.py) |
 | **React Mission Control Dashboard** | ✅ | Live trust economy gauge, hash-chained ledger stream, emergency stop | [`dashboard/`](dashboard/) |
-| **Automated Benchmark Suite (1,034 Tests)** | ✅ | Phases 11-13 (150), Phases 5-10 (205), Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32) | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| **Automated Benchmark Suite (1,064 Tests)** | ✅ | Industry Readiness (30), Phases 11-13 (150), Phases 5-10 (205), Harsh Enterprise (205), UCAN/Mesh (150), AP2/TOCTOU (140), Century (120), Reality (32), RedTeam (5), Unit (15) | [`BENCHMARKS.md`](BENCHMARKS.md) |
 | **Phase 3.5: Zero-Loss Audit WAL** | ✅ | Synchronous memory ring-buffer WAL (628ns), zero event loss under broker partition | [`gateway/audit_wal.go`](gateway/audit_wal.go) |
 | **Phase 3.5: Multi-Partition Merkle Ledger** | ✅ | Partition sub-chains (654ns) + binary Epoch Merkle tree aggregation (2.4µs), 0.00% forks | [`gateway/merkle_ledger.go`](gateway/merkle_ledger.go) |
 | **Phase 4.1: Microsecond Zero-Hop Policy Engine** | ✅ | Pure-Go precedent engine (214ns, 9,400x speedup) with adaptive circuit breaker | [`gateway/inprocess_engine.go`](gateway/inprocess_engine.go) |
@@ -744,10 +772,34 @@ Request arrives
 | **Phase 11: Dynamic Declarative Policy Engine (SPL)** | ✅ | Native SPL AST parser, condition evaluator, atomic pointer hot-reloader (222ns) | [`gateway/declarative_policy.go`](gateway/declarative_policy.go) |
 | **Phase 12: Tier-2 Multilingual Semantic Guardrail** | ✅ | Cross-lingual defense (RU, ZH, HI, ES, AR), homoglyph normalizer, 2-tier engine (1.83µs) | [`gateway/multilingual_guard.go`](gateway/multilingual_guard.go) |
 | **Phase 13: Zero-Dependency Embedded Raft Mesh** | ✅ | In-binary Raft consensus state machine (512ns, 0 allocs), quorum freeze & anti-smurfing | [`gateway/embedded_raft_mesh.go`](gateway/embedded_raft_mesh.go) |
+| **Industry Readiness & Dual-Surface Architecture** | ✅ | Pure-Go Edge Data Plane vs Cloud SaaS Control Plane, Stdio MCP Proxying, Offline Merkle WAL CLI | [`gateway/verify_cli.go`](gateway/verify_cli.go) |
 
 ---
 
 ## 🚀 Quick Start
+
+### ⚡ Option A: Instant Standalone Edge Mode (Pure Go — Zero Dependencies)
+
+Ideal for **Big Tech developers**, local CLI testing, and edge sidecars. No Docker, Kafka, PostgreSQL, or Python required. Boots in $< 10\text{ ms}$ with Native SPL in-process policy evaluation and append-only Merkle WAL logging:
+
+```bash
+# 1. Run the 30-Second MCP Zero-Trust Demonstration
+./scripts/demo_mcp.sh
+
+# 2. Or start Sentinel Gateway directly in standalone edge mode
+cd gateway
+SENTINEL_MODE=standalone go run . run
+
+# 3. Transparently proxy Claude Desktop / Cursor MCP tools via Stdio pipes
+go run . proxy --stdio -- npx -y @modelcontextprotocol/server-postgres "postgresql://localhost/db"
+
+# 4. Mathematically verify audit logs completely offline (zero database dependencies)
+go run . verify .sentinel/audit.wal
+```
+
+---
+
+### 🌐 Option B: Full Enterprise Cloud SaaS Setup (Multi-Service)
 
 ### Prerequisites
 
