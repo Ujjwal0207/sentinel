@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -428,4 +432,117 @@ func writeMCPError(w http.ResponseWriter, id interface{}, code int, message stri
 			Message: message,
 		},
 	})
+}
+
+// ProcessMCPStdioSession handles an active bidirectional MCP stdio stream.
+// Client messages from clientIn are inspected line-by-line.
+// Allowed messages are forwarded to upstreamIn.
+// Blocked tools/call messages receive an immediate JSON-RPC error on clientOut.
+// Responses from upstreamOut are forwarded directly to clientOut.
+func ProcessMCPStdioSession(clientIn io.Reader, clientOut io.Writer, upstreamIn io.Writer, upstreamOut io.Reader) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, 2)
+
+	// Goroutine 1: Forward upstream stdout -> client stdout (if upstreamOut provided)
+	if upstreamOut != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(upstreamOut)
+			buf := make([]byte, 64*1024)
+			scanner.Buffer(buf, ProxyMaxBodyBytes)
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if _, err := clientOut.Write(append(line, '\n')); err != nil {
+					errChan <- err
+					return
+				}
+			}
+			if err := scanner.Err(); err != nil && err != io.EOF {
+				errChan <- err
+			}
+		}()
+	}
+
+	// Goroutine 2: Inspect client stdin -> upstream stdin (or intercept)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(clientIn)
+		buf := make([]byte, 64*1024)
+		scanner.Buffer(buf, ProxyMaxBodyBytes)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(strings.TrimSpace(string(line))) == 0 {
+				continue
+			}
+
+			// Inspect with Sentinel Zero-Trust Engine
+			respBytes, allowed, err := InterceptMCPMessage(line)
+			if err != nil {
+				errResp := MCPResponse{
+					JSONRPC: "2.0",
+					Error:   &MCPError{Code: -32700, Message: "Parse error"},
+				}
+				b, _ := json.Marshal(errResp)
+				_, _ = clientOut.Write(append(b, '\n'))
+				continue
+			}
+
+			if !allowed {
+				// Blocked! Write rejection directly to clientOut without sending to upstream!
+				_, _ = clientOut.Write(append(respBytes, '\n'))
+				continue
+			}
+
+			// Allowed or non-tool call -> Forward to upstream child process
+			if upstreamIn != nil {
+				if _, err := upstreamIn.Write(append(line, '\n')); err != nil {
+					errChan <- err
+					return
+				}
+			} else {
+				// Standalone/testing mode without upstream: emit approved confirmation
+				_, _ = clientOut.Write(append(respBytes, '\n'))
+			}
+		}
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			errChan <- err
+		}
+	}()
+
+	wg.Wait()
+	close(errChan)
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunStdioMCPProcess launches the upstream command and transparently proxies standard I/O.
+func RunStdioMCPProcess(upstreamCmd string, upstreamArgs []string, clientIn io.Reader, clientOut io.Writer) error {
+	cmd := exec.Command(upstreamCmd, upstreamArgs...)
+	cmd.Stderr = os.Stderr
+
+	upstreamIn, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe for %s: %w", upstreamCmd, err)
+	}
+	defer upstreamIn.Close()
+
+	upstreamOut, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe for %s: %w", upstreamCmd, err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start upstream MCP command %s: %w", upstreamCmd, err)
+	}
+
+	sessionErr := ProcessMCPStdioSession(clientIn, clientOut, upstreamIn, upstreamOut)
+
+	_ = cmd.Wait()
+	return sessionErr
 }
