@@ -92,19 +92,6 @@ Open **`http://localhost:5173`**, click **Verify PayPal OAuth2** (or provide key
 
 ---
 
-## 🗓️ Project History (Pre- vs. Post-October 1, 2026)
-
-In accordance with hackathon disclosure guidelines:
-- **Pre-Oct 1, 2026 Foundation (July–Sept 2026):** Initial MVP prototype containing a baseline Go HTTP proxy with starter Casbin CSV rules, Kafka audit worker, Postgres/Redis Trust Economy k-NN prototype, and read-only React dashboard.
-- **Built During Hackathon Submission Period (Nov 2026):**
-  - Complete **Google Gemini** function-calling commerce agent + **PayPal Developer Sandbox** OAuth2/Payouts/Orders/Refunds execution client (`gemini_agent.py`, `paypal_sandbox.py`).
-  - **PayPal action RBAC policies, parameter ceilings, semantic taint defense, AP2 intent mandate recipient pinning, and Go <-> Python Fleet Freeze sync** (`policy.csv`, `inprocess_engine.go`, `semantic_guard.go`, `main.go`, `paypal_integration_test.go`).
-  - **Elasticsearch** `sentinel-audit-events` SIEM logging & 6-D `dense_vector` k-NN search (`elastic_audit.py`, `test_elastic_audit.py`).
-  - **AG Grid** audit ledger, live interactive 3-stage pipeline UI (`App.jsx`), and **Render** Free-Tier `Dockerfile` + `render.yaml` deployment Blueprint.
-  - Extensive November Go Edge Gateway hardening: Ed25519 + UCAN DAGs, zero-hop engine, 32D semantic guard, pre-commit WAL + offline CLI verification, MCP stdio proxy, idempotency cache, SOC 2 / EU AI Act compliance exports, and standalone mode.
-
----
-
 ## 📑 Table of Contents
 
 | | Section | What you'll find |
