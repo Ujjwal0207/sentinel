@@ -1,28 +1,107 @@
-# SENTINEL — Autonomous AI Agent Security & Governance Platform
+# SENTINEL — Zero-Trust Security Gateway for Autonomous AI Commerce (PayPal + Gemini)
 
 <p align="center">
   <img src="dashboard/src/assets/hero.png" alt="SENTINEL Mission Control" width="720" />
 </p>
 
 <p align="center">
-  <a href="#-pick-your-path"><img src="https://img.shields.io/badge/🎯_Start-Quick_Start-2563eb?style=for-the-badge" alt="Quick Start" /></a>
-  <a href="#-interactive-api-playground"><img src="https://img.shields.io/badge/🧪_Try-API_Playground-7c3aed?style=for-the-badge" alt="API Playground" /></a>
-  <a href="#-live-demo-scenarios"><img src="https://img.shields.io/badge/🎬_Watch-Demo_Scenarios-0ea5e9?style=for-the-badge" alt="Demo Scenarios" /></a>
-  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,064_Test_Scenarios-059669?style=for-the-badge" alt="Benchmarks" /></a>
-  <a href="#-implementation-status"><img src="https://img.shields.io/badge/✅_See-What's_Built-10b981?style=for-the-badge" alt="Status" /></a>
+  <a href="#-paypal--gemini-integration-overview"><img src="https://img.shields.io/badge/💳_PayPal-Developer_Sandbox-003087?style=for-the-badge" alt="PayPal Sandbox" /></a>
+  <a href="#-paypal--gemini-integration-overview"><img src="https://img.shields.io/badge/✨_AI-Google_Gemini_3.8_Flash-2563eb?style=for-the-badge" alt="Google Gemini" /></a>
+  <a href="#-quick-setup-local--render"><img src="https://img.shields.io/badge/☁️_Deploy-Render_Blueprint-059669?style=for-the-badge" alt="Render" /></a>
+  <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,064_Go_%2B_13_Py_Tests-0ea5e9?style=for-the-badge" alt="Benchmarks" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-475569?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Domain-AI_Agent_Security_%26_Governance-2563eb?style=flat-square" alt="Domain" />
-  <img src="https://img.shields.io/badge/Identity-Ed25519_%2B_UCAN_DAGs-7c3aed?style=flat-square" alt="KYA" />
-  <img src="https://img.shields.io/badge/Intent_Drift-Google_AP2_Anchor-0ea5e9?style=flat-square" alt="Google AP2" />
-  <img src="https://img.shields.io/badge/State_Mesh-Redis_Cluster_Lua-dc2626?style=flat-square" alt="Redis Lua" />
-  <img src="https://img.shields.io/badge/MCP_Gateway-Zero--Trust_3.5µs-0ea5e9?style=flat-square" alt="MCP" />
-  <img src="https://img.shields.io/badge/Multi--Tenancy-171ns_Auth-10b981?style=flat-square" alt="Multi-Tenancy" />
-  <img src="https://img.shields.io/badge/Compliance-EU_AI_Act_%2B_SOC2-7c3aed?style=flat-square" alt="Compliance" />
-</p>
+> **"Banks have KYC for humans — SENTINEL enforces KYA (Know Your Agent) for autonomous commerce. Before Google Gemini can trigger a PayPal Developer Sandbox payout, order, or refund, SENTINEL's sub-millisecond Go Edge Gateway verifies cryptographic identity, Google AP2 user-intent mandates, Casbin RBAC, parameter caps, and semantic taint — failing closed with `$0.00` ever leaving PayPal on attacks."**
 
-> **"Traditional firewalls inspect network packets. SENTINEL inspects agentic tool execution. Banks have KYC for humans — SENTINEL enforces KYA through sub-millisecond edge gatekeeping, asymmetric Ed25519 identity, UCAN delegation DAGs, Google AP2 user-intent anchoring, distributed Redis Lua state synchronization, precedent-driven Case Law, and dynamic fleet contagion defense."**
+---
+
+## 💳 PayPal + Gemini Integration Overview
+
+SENTINEL sits between **Google Gemini** (natural-language tool planner) and the **PayPal Developer Sandbox API** (`https://api-m.sandbox.paypal.com`):
+
+```text
+  User Prompt ──▶ [1] Google Gemini (Function Calling: gemini-3.8-flash)
+                       │  Plans paypal_payout / paypal_create_order / paypal_refund_capture
+                       ▼
+                  [2] SENTINEL Go Edge Gateway (:8080/enforce)
+                       │  KYA HMAC-SHA256 + Google AP2 Mandate + Casbin RBAC
+                       │  + Parameter Caps + SemanticGuard (Prompt Inject / Taint) + WAL
+                       ├──▶ DENY (HTTP 401/403/422/429) ──▶ Fail-Closed: PayPal NOT called ($0.00)
+                       │
+                       ▼ ALLOW (HTTP 200 + SHA-256 WAL Receipt)
+                  [3] PayPal Developer Sandbox Client
+                       │  OAuth2 Client Credentials + Payouts / Orders v2 / Refunds v2
+                       ▼
+                  [4] Elastic SIEM (`sentinel-audit-events` + 6D cosine dense_vector) + AG Grid UI
+```
+
+### Stack & Sponsor Integrations Used
+- **PayPal Developer Sandbox (`python_workers/paypal_sandbox.py`):** Thread-safe OAuth2 client pinned strictly to `https://api-m.sandbox.paypal.com` supporting PayPal **Payouts** (`/v1/payments/payouts`), **Checkout Orders v2** (`/v2/checkout/orders`), **Capture Refunds v2** (`/v2/payments/captures/{id}/refund`), ISO-4217 amount formatting, and idempotent WAL request IDs.
+- **Google Gemini (`python_workers/gemini_agent.py`):** Uses Gemini `v1beta` `generateContent` Function Calling (`paypal_payout`, `paypal_create_order`, `paypal_refund_capture`), signs every planned action with KYA HMAC-SHA256 + Google AP2 Intent Mandate headers, and refuses to invoke PayPal unless SENTINEL returns HTTP `200 ALLOW`.
+- **Elasticsearch (`python_workers/elastic_audit.py`):** Streams ALLOW/DENY audit events and 6-dimensional behavioral vectors (`[Amount, Hour, Action, Entropy, Complexity, RiskWeight]`) to `sentinel-audit-events` (`dense_vector` cosine mapping) for full-text SIEM filtering and `kNN` attack similarity search (with automatic live buffer fallback when offline).
+- **AG Grid (`dashboard/src/App.jsx`):** Powers the interactive Operations Audit Ledger with column sorting, filtering, pagination, 6-D k-NN score display, and 1-click CSV export.
+- **Render (`Dockerfile`, `render.yaml`, `scripts/start_render.sh`):** Single-click Blueprint deploying the combined Go Gateway + FastAPI service (`sentinel-api`, `$0` Docker Web Service) and React + AG Grid UI (`sentinel-dashboard`, `$0` Static Site).
+
+---
+
+## 🚀 Quick Setup (Local & Render)
+
+### 1. Clone & Configure Environment
+```bash
+git clone https://github.com/Ujjwal0207/sentinel.git
+cd sentinel
+cp .env.example .env
+# Add your GEMINI_API_KEY, PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET (Sandbox),
+# and optionally ELASTICSEARCH_URL + ELASTICSEARCH_API_KEY
+```
+
+### 2. Zero-Key Automated Verification (Go + Python + UI)
+```bash
+# Go Gateway + PayPal Guardrails & AP2 Mandate Integration Tests
+cd gateway && go test -count=1 ./...
+
+# Python Unit + Live Go Gateway Process E2E + Elastic SIEM/kNN Tests
+cd .. && python3 -m unittest discover -s python_workers -p 'test_*.py' -v
+
+# React + AG Grid Dashboard Lint & Build
+cd dashboard && npm ci && npm run lint && npm run build
+```
+
+### 3. Run Live Locally (3 Terminals, No Docker Database Required)
+```bash
+# Terminal 1 — Go Edge Gateway (:8080)
+cd gateway && go run .
+
+# Terminal 2 — Python FastAPI + Gemini + PayPal + Elastic API (:8000)
+pip install -r python_workers/requirements.txt
+python3 -m uvicorn python_workers.case_law_engine:app --port 8000
+
+# Terminal 3 — React + AG Grid Dashboard (:5173)
+cd dashboard && npm install && npm run dev
+```
+Open **`http://localhost:5173`**, click **Verify PayPal OAuth2** (or provide keys in **Optional Runtime Keys**), and test the 1-click **Safe PayPal Payout ($25)**, **Checkout Order v2 ($79)**, **AP2 Recipient Hijack**, and **Prompt Inject + $30k Cap** demos.
+
+### 4. One-Click Deploy on Render (`render.yaml`)
+1. Push/connect this repo in Render via **New -> Blueprint** (`render.yaml` auto-configures `sentinel-api` + `sentinel-dashboard`).
+2. In Render Dashboard -> `sentinel-api` -> **Environment**, enter your private keys:
+   - `GEMINI_API_KEY`
+   - `PAYPAL_CLIENT_ID` & `PAYPAL_CLIENT_SECRET` (from `developer.paypal.com` -> Sandbox)
+   - *(Optional)* `ELASTICSEARCH_URL` & `ELASTICSEARCH_API_KEY`
+3. Open your deployed `sentinel-dashboard` URL cleanly in the browser.
+
+---
+
+## 🗓️ Project History (Pre- vs. Post-October 1, 2026)
+
+In accordance with hackathon disclosure guidelines:
+- **Pre-Oct 1, 2026 Foundation (July–Sept 2026):** Initial MVP prototype containing a baseline Go HTTP proxy with starter Casbin CSV rules, Kafka audit worker, Postgres/Redis Trust Economy k-NN prototype, and read-only React dashboard.
+- **Built During Hackathon Submission Period (Nov 2026):**
+  - Complete **Google Gemini** function-calling commerce agent + **PayPal Developer Sandbox** OAuth2/Payouts/Orders/Refunds execution client (`gemini_agent.py`, `paypal_sandbox.py`).
+  - **PayPal action RBAC policies, parameter ceilings, semantic taint defense, AP2 intent mandate recipient pinning, and Go <-> Python Fleet Freeze sync** (`policy.csv`, `inprocess_engine.go`, `semantic_guard.go`, `main.go`, `paypal_integration_test.go`).
+  - **Elasticsearch** `sentinel-audit-events` SIEM logging & 6-D `dense_vector` k-NN search (`elastic_audit.py`, `test_elastic_audit.py`).
+  - **AG Grid** audit ledger, live interactive 3-stage pipeline UI (`App.jsx`), and **Render** Free-Tier `Dockerfile` + `render.yaml` deployment Blueprint.
+  - Extensive November Go Edge Gateway hardening: Ed25519 + UCAN DAGs, zero-hop engine, 32D semantic guard, pre-commit WAL + offline CLI verification, MCP stdio proxy, idempotency cache, SOC 2 / EU AI Act compliance exports, and standalone mode.
 
 ---
 
@@ -30,6 +109,8 @@
 
 | | Section | What you'll find |
 | :---: | :--- | :--- |
+| 💳 | [PayPal + Gemini Overview](#-paypal--gemini-integration-overview) | Architecture, AP2 mandates & sponsor stack |
+| 🚀 | [Quick Setup & Render](#-quick-setup-local--render) | Local launch, tests & 1-click Render Blueprint |
 | 🎯 | [Pick Your Path](#-pick-your-path) | Judge demo · Developer setup · API explorer |
 | 🛡️ | [Why SENTINEL Exists](#-why-sentinel-exists) | The agentic security gap |
 | ⚡ | [Core Innovations](#-core-architectural-innovations) | Expandable deep-dives on each pillar (KYA, AP2, UCAN, Redis Lua) |
@@ -40,9 +121,9 @@
 | 👥 | [Agent RBAC Matrix](#-agent-rbac-matrix) | Who can do what |
 | 🏗️ | [Architecture](#-system-architecture) | Services, ports, stack |
 | ✅ | [Implementation Status](#-implementation-status) | Built across all phases (1 through 13) |
-| 🚀 | [Quick Start](#-quick-start) | 6-step launch guide |
 | 🔧 | [Troubleshooting](#-troubleshooting) | Common fixes (collapsible) |
 | 📂 | [Project Structure](#-project-structure) | Repo map |
+| 📄 | [License](#-license) | MIT License |
 
 ---
 
@@ -54,16 +135,15 @@ Choose the path that matches what you're doing right now:
 <tr>
 <td width="33%" valign="top">
 
-### 🏆 Judge / Demo (5 min)
+### 🏆 Judge / Demo (2 min)
 
-1. `docker-compose up -d`
-2. `cd python_workers && pip install -r requirements.txt && python seed_precedents.py`
-3. Start Case Law + Audit + Go + Dashboard (see [Quick Start](#-quick-start))
+1. Run Go Gateway: `cd gateway && go run .`
+2. Run Python API: `python3 -m uvicorn python_workers.case_law_engine:app --port 8000`
+3. Run UI: `cd dashboard && npm install && npm run dev`
 4. Open **`http://localhost:5173`**
-5. Run `python simulator.py` in another terminal
-6. **Press Emergency Stop** on the dashboard
+5. Test **PayPal Payout**, **AP2 Hijack**, **Elastic SIEM / 6D k-NN**, and **Emergency Stop**
 
-👉 [Demo Scenarios](#-live-demo-scenarios)
+👉 [Quick Setup & Render](#-quick-setup-local--render)
 
 </td>
 <td width="33%" valign="top">
@@ -981,21 +1061,27 @@ sentinel/
 ├── casbin_policies/                        # Zero-Trust Declarative RBAC
 │   ├── model.conf
 │   └── policy.csv
-├── python_workers/                         # Governance intelligence
-│   ├── case_law_engine.py                  # FastAPI · k-NN · contagion · kill switch
+├── python_workers/                         # Governance, AI & PayPal Sandbox intelligence
+│   ├── case_law_engine.py                  # FastAPI · k-NN · contagion · kill switch · Elastic API
+│   ├── gemini_agent.py                     # Google Gemini function calling + KYA/AP2 signing
+│   ├── paypal_sandbox.py                   # PayPal Developer Sandbox OAuth2, Payouts, Orders, Refunds
+│   ├── elastic_audit.py                    # Elasticsearch `sentinel-audit-events` SIEM & 6D kNN client
 │   ├── audit_worker.py                     # Hash-chain consumer
 │   ├── seed_precedents.py                  # DB init + precedent seeding
 │   ├── simulator.py                        # Multi-agent traffic generator
+│   ├── test_gemini_paypal.py               # Python unit + live Go Gateway E2E tests
+│   ├── test_elastic_audit.py               # Elasticsearch SIEM & 6D dense_vector tests
 │   ├── config.py                           # Environment configuration
 │   └── requirements.txt
 ├── dashboard/                              # Mission Control UI
-│   ├── src/App.jsx                         # Live telemetry + kill switch
-│   └── src/index.css                       # Dark-mode design system
-├── docs/                                   # Architectural Blueprints & Governance
-│   ├── PHASE_GAP_1.md                      # Next-Gen Architectural Blueprint & Forensic Audit
-│   └── PROJECT_TRACKER.md                  # Single Master Project & Flaw Tracker (70 Entries)
-├── BENCHMARKS.md                           # Complete 474-scenario Benchmark Scorecard & Proof
-└── docker-compose.yml                      # Postgres · Redis · Redpanda
+│   ├── src/App.jsx                         # Gemini/PayPal demo + AG Grid SIEM ledger + kill switch
+│   └── src/index.css                       # Neutral dark-mode design system
+├── Dockerfile                              # Combined Go Gateway + FastAPI Render container
+├── render.yaml                             # 1-click Render Blueprint ($0 Free Tier)
+├── LICENSE                                 # MIT License
+├── BENCHMARKS.md                           # Complete benchmark scorecard & proof
+├── docker-compose.gateway-only.yml         # Standalone Go gateway compose file
+└── docker-compose.yml                      # Full infra (Postgres · Redis · Redpanda)
 ```
 
 <details>
@@ -1008,6 +1094,12 @@ sentinel/
 | **SOC 2 Type II** | Cryptographic hash chains, non-repudiation |
 
 </details>
+
+---
+
+## 📄 License
+
+Licensed under the [MIT License](LICENSE).
 
 ---
 
