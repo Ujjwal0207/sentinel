@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,7 +65,8 @@ var globalAuditWAL AuditWAL
 
 func init() {
 	var err error
-	globalAuditWAL, err = NewMemoryRingBufferWAL(65536, "")
+	diskPath := os.Getenv("SENTINEL_WAL_PATH")
+	globalAuditWAL, err = NewMemoryRingBufferWAL(65536, diskPath)
 	if err != nil {
 		panic(err)
 	}
@@ -87,6 +89,9 @@ func NewMemoryRingBufferWAL(capacity int, diskPath string) (*MemoryRingBufferWAL
 	}
 
 	if diskPath != "" {
+		if dir := filepath.Dir(diskPath); dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0755)
+		}
 		file, err := os.OpenFile(diskPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open WAL disk file: %w", err)
