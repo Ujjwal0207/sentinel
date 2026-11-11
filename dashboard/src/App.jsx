@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Shield,
   ShieldAlert,
@@ -16,11 +16,36 @@ import {
   CreditCard,
   AlertTriangle,
   ExternalLink,
+  Search,
+  Download,
+  Database,
 } from 'lucide-react';
+import { AgGridReact } from 'ag-grid-react';
+import { AllCommunityModule, ModuleRegistry, colorSchemeDark, themeQuartz } from 'ag-grid-community';
 import './index.css';
 
-// Configurable API base URL (Issue #36): supports staging/production via env var
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const sentinelGridTheme = themeQuartz.withPart(colorSchemeDark).withParams({
+  backgroundColor: '#161A20',
+  foregroundColor: '#E6EDF3',
+  headerBackgroundColor: '#15181E',
+  headerTextColor: '#8B949E',
+  oddRowBackgroundColor: '#13171D',
+  borderColor: '#2A3038',
+  rowHoverColor: '#1D222A',
+  accentColor: '#2F81F7',
+  fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+  fontSize: 13,
+  headerFontSize: 12,
+});
+
+// Configurable API base URL: supports local dev (`http://localhost:8000`) and Render `property: host`
+const rawApiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8000').trim();
+const API_BASE =
+  rawApiBase.startsWith('http://') || rawApiBase.startsWith('https://')
+    ? rawApiBase.replace(/\/+$/, '')
+    : `https://${rawApiBase.replace(/\/+$/, '')}`;
 
 // Fallback sample ledger shown ONLY when backend API is unreachable
 const SAMPLE_OFFLINE_LOGS = [
@@ -117,6 +142,14 @@ function App() {
   const [execError, setExecError] = useState('');
   const [execResult, setExecResult] = useState(null);
 
+  // Elasticsearch SIEM + AG Grid Search State
+  const gridRef = useRef(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchDecision, setSearchDecision] = useState('');
+  const [searchMode, setSearchMode] = useState('text');
+  const [searching, setSearching] = useState(false);
+  const [searchMeta, setSearchMeta] = useState(null);
+
   const fetchIntegrationStatus = useCallback(async (verifyOAuth = false) => {
     if (verifyOAuth) setVerifyingPayPal(true);
     try {
@@ -132,19 +165,21 @@ function App() {
     }
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    try {
-      const start = performance.now();
-      const response = await fetch(`${API_BASE}/api/logs`);
-      const elapsed = (performance.now() - start).toFixed(1);
-      setEdgeLatency(`${elapsed} ms`);
-      if (!response.ok) throw new Error('API not ready');
-      const data = await response.json();
-      setLogs(data);
-      setBackendOffline(false);
-    } catch {
-      setLogs(SAMPLE_OFFLINE_LOGS);
-      setBackendOffline(true);
+  const refreshAll = useCallback(async (skipLogs = false) => {
+    if (!skipLogs) {
+      try {
+        const start = performance.now();
+        const response = await fetch(`${API_BASE}/api/logs`);
+        const elapsed = (performance.now() - start).toFixed(1);
+        setEdgeLatency(`${elapsed} ms`);
+        if (!response.ok) throw new Error('API not ready');
+        const data = await response.json();
+        setLogs(data);
+        setBackendOffline(false);
+      } catch {
+        setLogs(SAMPLE_OFFLINE_LOGS);
+        setBackendOffline(true);
+      }
     }
 
     try {
@@ -167,15 +202,15 @@ function App() {
   }, []);
 
   useEffect(() => {
-    refreshAll();
+    refreshAll(Boolean(searchMeta));
     fetchIntegrationStatus(false);
 
     const interval = setInterval(() => {
-      refreshAll();
+      refreshAll(Boolean(searchMeta));
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [refreshAll, fetchIntegrationStatus]);
+  }, [refreshAll, fetchIntegrationStatus, searchMeta]);
 
   const handleKillSwitch = async () => {
     try {
@@ -257,7 +292,8 @@ function App() {
         setExecError(data.detail || `Request failed with HTTP ${resp.status}`);
       } else {
         setExecResult(data);
-        await refreshAll();
+        setSearchMeta(null);
+        await refreshAll(false);
       }
     } catch (err) {
       setExecError(`Could not reach SENTINEL API (${API_BASE}): ${err.message}`);
@@ -274,6 +310,152 @@ function App() {
     runAgentWorkflow(scenario);
   };
 
+  const runAuditSearch = async (evt) => {
+    if (evt) evt.preventDefault();
+    setSearching(true);
+    try {
+      const params = new URLSearchParams();
+      if (searchQuery.trim()) params.set('q', searchQuery.trim());
+      if (searchDecision) params.set('decision', searchDecision);
+      params.set('mode', searchMode);
+      params.set('limit', '50');
+
+      const resp = await fetch(`${API_BASE}/api/audit/search?${params.toString()}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setLogs(data.hits || []);
+        setSearchMeta({
+          source: data.source,
+          mode: data.mode,
+          total: data.total,
+          index: data.index,
+          queryVector: data.query_vector,
+        });
+        setBackendOffline(false);
+      }
+    } catch {
+      // Fallback local filter when backend is unreachable
+      const q = searchQuery.trim().toLowerCase();
+      const filtered = SAMPLE_OFFLINE_LOGS.filter((item) => {
+        if (searchDecision && item.decision !== searchDecision) return false;
+        if (!q) return true;
+        return `${item.agent} ${item.action} ${item.amount} ${item.paypal_id || ''} ${item.hash}`
+          .toLowerCase()
+          .includes(q);
+      });
+      setLogs(filtered);
+      setSearchMeta({ source: 'offline_preview', mode: 'text', total: filtered.length });
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const clearAuditSearch = async () => {
+    setSearchQuery('');
+    setSearchDecision('');
+    setSearchMode('text');
+    setSearchMeta(null);
+    await refreshAll(false);
+  };
+
+  const handleExportCsv = () => {
+    if (gridRef.current?.api) {
+      gridRef.current.api.exportDataAsCsv({
+        fileName: 'sentinel-audit-events.csv',
+      });
+    }
+  };
+
+  const showScoreColumn = Boolean(searchMeta && (searchMeta.mode === 'knn' || searchMeta.source === 'elasticsearch'));
+
+  const auditColumnDefs = useMemo(() => {
+    const cols = [
+      {
+        headerName: 'Time',
+        field: 'time',
+        width: 118,
+        filter: true,
+        cellStyle: { color: 'var(--text-secondary)' },
+      },
+      {
+        headerName: 'Agent ID',
+        field: 'agent',
+        minWidth: 155,
+        flex: 1,
+        filter: true,
+        cellRenderer: (params) => (
+          <div className="agent-name">
+            <Cpu size={14} color="var(--text-secondary)" />
+            <span>{params.value}</span>
+          </div>
+        ),
+      },
+      {
+        headerName: 'Action',
+        field: 'action',
+        minWidth: 195,
+        flex: 1.25,
+        filter: true,
+        cellRenderer: (params) => (
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
+            <span>{params.value}</span>
+            {params.data?.paypal_id && (
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                PayPal: {params.data.paypal_id}
+              </span>
+            )}
+          </div>
+        ),
+      },
+      {
+        headerName: 'Amount',
+        field: 'amount',
+        width: 120,
+        filter: true,
+        cellStyle: { fontFamily: 'JetBrains Mono, monospace' },
+      },
+      {
+        headerName: 'Decision',
+        field: 'decision',
+        width: 130,
+        filter: true,
+        cellRenderer: (params) => (
+          <span className={params.value === 'ALLOW' ? 'tag-allow' : 'tag-deny'}>
+            {params.value === 'ALLOW' ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+            {params.value}
+          </span>
+        ),
+      },
+      {
+        headerName: 'SHA-256 Chain',
+        field: 'hash',
+        minWidth: 155,
+        flex: 1,
+        filter: true,
+        cellRenderer: (params) => <span className="hash-cell">{params.value}</span>,
+      },
+    ];
+    if (showScoreColumn) {
+      cols.push({
+        headerName: searchMeta?.mode === 'knn' ? '6D Cosine' : 'Score',
+        field: 'score',
+        width: 110,
+        valueFormatter: (params) =>
+          params.value !== null && params.value !== undefined ? Number(params.value).toFixed(3) : '--',
+        cellStyle: { fontFamily: 'JetBrains Mono, monospace', color: 'var(--accent-blue)' },
+      });
+    }
+    return cols;
+  }, [showScoreColumn, searchMeta?.mode]);
+
+  const defaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      resizable: true,
+    }),
+    [],
+  );
+
   // Robust Trust Budget calculation (Issue #46)
   const numericBudget =
     trustBudget !== null && trustBudget !== undefined && !isNaN(Number(trustBudget))
@@ -284,7 +466,7 @@ function App() {
     numericBudget > 70
       ? 'var(--accent-green)'
       : numericBudget > 40
-        ? '#F59E0B'
+        ? 'var(--accent-amber)'
         : 'var(--accent-red)';
 
   const gatewayOnline = Boolean(integrations?.gateway?.reachable);
@@ -295,6 +477,8 @@ function App() {
       (paypalClientId.trim() && paypalClientSecret.trim()),
   );
   const paypalVerified = integrations?.paypal?.connected === true;
+  const elasticOnline = Boolean(integrations?.elastic?.reachable);
+  const elasticConfigured = Boolean(integrations?.elastic?.configured);
 
   return (
     <div className="dashboard-container">
@@ -302,11 +486,8 @@ function App() {
       <header className="header">
         <div className="header-title">
           <Shield
-            size={36}
-            color={isFleetActive ? '#3B82F6' : '#EF4444'}
-            style={{
-              filter: `drop-shadow(0 0 10px ${isFleetActive ? 'rgba(59, 130, 246, 0.5)' : 'rgba(239, 68, 68, 0.5)'})`,
-            }}
+            size={34}
+            color={isFleetActive ? 'var(--accent-blue)' : 'var(--accent-red)'}
           />
           <h1>SENTINEL COMMAND</h1>
         </div>
@@ -322,6 +503,10 @@ function App() {
           <span className={`integration-pill ${paypalVerified ? 'ok' : paypalReady ? 'ok' : 'warn'}`}>
             <CreditCard size={13} />
             PayPal Sandbox: {paypalVerified ? 'OAUTH VERIFIED' : paypalReady ? 'CONFIGURED' : 'NEEDS KEYS'}
+          </span>
+          <span className={`integration-pill ${elasticOnline ? 'ok' : ''}`} title={integrations?.elastic?.message || ''}>
+            <Database size={13} />
+            Elastic: {elasticOnline ? 'CONNECTED' : elasticConfigured ? 'OFFLINE' : 'LOCAL FALLBACK'}
           </span>
           <button
             type="button"
@@ -419,12 +604,8 @@ function App() {
                 </button>
               ) : (
                 <button
-                  className="kill-switch"
+                  className="kill-switch resume"
                   onClick={handleResumeFleet}
-                  style={{
-                    background: 'linear-gradient(135deg, #059669, #10B981)',
-                    boxShadow: '0 0 20px rgba(16, 185, 129, 0.3)',
-                  }}
                 >
                   <Play size={16} style={{ marginRight: '0.5rem' }} />
                   RESUME FLEET
@@ -586,10 +767,10 @@ function App() {
                 style={{
                   marginTop: '0.9rem',
                   padding: '0.75rem 1rem',
-                  borderRadius: '8px',
-                  backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                  border: '1px solid rgba(239, 68, 68, 0.35)',
-                  color: '#FCA5A5',
+                  borderRadius: '6px',
+                  backgroundColor: 'var(--accent-red-tint)',
+                  border: '1px solid rgba(229, 83, 75, 0.35)',
+                  color: 'var(--accent-red)',
                   fontSize: '0.82rem',
                 }}
               >
@@ -644,7 +825,7 @@ function App() {
                     <span>3. PayPal Sandbox</span>
                     <span>{execResult.paypal?.environment || 'sandbox'}</span>
                   </div>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: execResult.paypal?.executed ? 'var(--accent-green)' : execResult.decision === 'DENY' ? 'var(--accent-red)' : '#FBBF24' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: execResult.paypal?.executed ? 'var(--accent-green)' : execResult.decision === 'DENY' ? 'var(--accent-red)' : 'var(--accent-amber)' }}>
                     {execResult.paypal?.status || execResult.status}
                   </div>
                   <div style={{ fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: '1.45', wordBreak: 'break-word' }}>
@@ -661,7 +842,7 @@ function App() {
                       href={execResult.paypal.approve_url}
                       target="_blank"
                       rel="noreferrer"
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#93C5FD', fontSize: '0.76rem', fontWeight: 600 }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--accent-blue)', fontSize: '0.76rem', fontWeight: 600 }}
                     >
                       Open PayPal Sandbox Approval Link <ExternalLink size={12} />
                     </a>
@@ -671,62 +852,109 @@ function App() {
             )}
           </div>
 
-          {/* Audit Log Table */}
+          {/* Audit Ledger (AG Grid + Elastic SIEM / 6D Vector Search) */}
           <div className="card" style={{ display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem 1.75rem 0 1.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', padding: '1.5rem 1.5rem 0 1.5rem' }}>
               <h2 style={{ marginBottom: 0 }}>
-                <ShieldAlert size={18} /> Immutable Audit Ledger (KYA Passport)
+                <ShieldAlert size={18} /> Immutable Audit Ledger (AG Grid + Elastic SIEM)
               </h2>
-              {backendOffline && (
-                <span className="integration-pill warn" style={{ fontSize: '0.7rem' }}>
-                  BACKEND OFFLINE - SAMPLE PREVIEW
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {searchMeta && (
+                  <span className="integration-pill ok" style={{ fontSize: '0.7rem' }}>
+                    {searchMeta.source === 'elasticsearch'
+                      ? `ELASTIC (${searchMeta.index})`
+                      : 'IN-MEMORY SEARCH'}
+                    {' • '}
+                    {searchMeta.mode === 'knn' ? '6D KNN' : 'SIEM TEXT'} ({searchMeta.total})
+                  </span>
+                )}
+                {backendOffline && (
+                  <span className="integration-pill warn" style={{ fontSize: '0.7rem' }}>
+                    BACKEND OFFLINE - SAMPLE PREVIEW
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <form className="audit-toolbar" onSubmit={runAuditSearch}>
+              <input
+                aria-label="Search audit events"
+                className="sentinel-input"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search Elastic SIEM (agent, PAYPAL_PAYOUT, PayPal ID, $25000, WAL hash)..."
+              />
+              <select
+                aria-label="Filter by decision"
+                className="sentinel-select"
+                value={searchDecision}
+                onChange={(e) => setSearchDecision(e.target.value)}
+              >
+                <option value="">All Decisions</option>
+                <option value="ALLOW">ALLOW Only</option>
+                <option value="DENY">DENY Only</option>
+              </select>
+              <select
+                aria-label="Search mode"
+                className="sentinel-select"
+                value={searchMode}
+                onChange={(e) => setSearchMode(e.target.value)}
+              >
+                <option value="text">Text SIEM Query</option>
+                <option value="knn">6D Vector k-NN</option>
+              </select>
+              <button type="submit" className="micro-btn" disabled={searching} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 0.85rem' }}>
+                <Search size={13} />
+                {searching ? 'Searching...' : 'Search'}
+              </button>
+              <button
+                type="button"
+                className="micro-btn"
+                onClick={clearAuditSearch}
+                disabled={!searchMeta && !searchQuery && !searchDecision}
+                style={{ padding: '0.55rem 0.75rem' }}
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                className="micro-btn"
+                onClick={handleExportCsv}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.55rem 0.85rem' }}
+              >
+                <Download size={13} />
+                Export CSV
+              </button>
+            </form>
+
+            <div className="audit-meta-bar">
+              <span>
+                {searchMeta
+                  ? `Paused live stream while viewing ${logs.length} search match(es). Click Reset to resume 2s polling.`
+                  : 'Live stream updating every 2s. Click column headers to sort/filter or export CSV.'}
+              </span>
+              {searchMeta?.queryVector && (
+                <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.7rem' }}>
+                  6D Vector: [{searchMeta.queryVector.join(', ')}]
                 </span>
               )}
             </div>
-            <div className="log-table-wrapper" style={{ padding: '0.75rem 1.75rem 1.75rem 1.75rem' }}>
-              <table className="log-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Agent ID</th>
-                    <th>Action</th>
-                    <th>Amount</th>
-                    <th>Governance Decision</th>
-                    <th>SHA-256 Chain</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log) => (
-                    <tr key={log.id}>
-                      <td style={{ color: 'var(--text-secondary)' }}>{log.time}</td>
-                      <td>
-                        <div className="agent-name">
-                          <Cpu size={14} color="var(--text-secondary)" />
-                          {log.agent}
-                        </div>
-                      </td>
-                      <td>
-                        <div>{log.action}</div>
-                        {log.paypal_id && (
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                            PayPal: {log.paypal_id}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>{log.amount}</td>
-                      <td>
-                        <span className={log.decision === 'ALLOW' ? 'tag-allow' : 'tag-deny'}>
-                          {log.decision === 'ALLOW' ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                          {log.decision}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="hash-cell">{log.hash}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            <div className="ag-grid-shell">
+              <AgGridReact
+                ref={gridRef}
+                theme={sentinelGridTheme}
+                rowData={logs}
+                columnDefs={auditColumnDefs}
+                defaultColDef={defaultColDef}
+                getRowId={(params) => String(params.data.id)}
+                rowHeight={48}
+                headerHeight={40}
+                pagination={true}
+                paginationPageSize={10}
+                paginationPageSizeSelector={[10, 25, 50]}
+                suppressCellFocus={true}
+              />
             </div>
           </div>
         </section>
