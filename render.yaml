@@ -1,0 +1,61 @@
+services:
+  # 1. Combined SENTINEL Backend (Go Edge Gateway on loopback :8080 + FastAPI / Gemini / PayPal / Elastic on $PORT)
+  - type: web
+    name: sentinel-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SENTINEL_MODE
+        value: standalone
+      - key: SENTINEL_INPROCESS_POLICY
+        value: "true"
+      - key: SENTINEL_STRICT_AUTH
+        value: "true"
+      - key: SENTINEL_GATEWAY_URL
+        value: http://127.0.0.1:8080/enforce
+      - key: SENTINEL_AGENT_SECRET
+        generateValue: true
+      - key: SENTINEL_INTENT_SECRET
+        generateValue: true
+      - key: PAYPAL_MODE
+        value: sandbox
+      - key: PAYPAL_DEFAULT_RECEIVER
+        value: sb-buyer@personal.example.com
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      - key: ELASTICSEARCH_INDEX
+        value: sentinel-audit-events
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      # Fill these in Render Dashboard -> sentinel-api -> Environment (never commit secrets to Git!)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      # Optional Elastic Cloud / Serverless credentials
+      - key: ELASTICSEARCH_URL
+        sync: false
+      - key: ELASTICSEARCH_API_KEY
+        sync: false
+
+  # 2. React + AG Grid Operations Dashboard (Render Static Site, $0)
+  - type: web
+    name: sentinel-dashboard
+    runtime: static
+    rootDir: dashboard
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: sentinel-api
+          property: host
