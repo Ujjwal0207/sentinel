@@ -140,7 +140,7 @@ func ComputeIntentCommitment(secret, authorizerID, action string, maxAmount floa
 
 // extractPayloadRecipient looks up recipient identifiers across common alias keys
 func extractPayloadRecipient(payload map[string]interface{}) string {
-	keys := []string{"recipient", "to", "payee", "beneficiary", "target_account", "account_id", "destination_account", "user_id"}
+	keys := []string{"recipient", "recipient_email", "receiver", "to", "payee", "beneficiary", "target_account", "account_id", "destination_account", "user_id"}
 	for _, k := range keys {
 		if v, ok := payload[k]; ok && v != nil {
 			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
@@ -1032,6 +1032,8 @@ func main() {
 	http.HandleFunc("/mcp/v1", MCPProxyHandler)
 	http.HandleFunc("/v1/policies", policyHandler)
 	http.HandleFunc("/v1/cluster/raft", raftStatusHandler)
+	http.HandleFunc("/v1/fleet/freeze", fleetFreezeHandler)
+	http.HandleFunc("/v1/fleet/resume", fleetResumeHandler)
 
 	// 3. Start Server
 	port := ":8080"
@@ -1101,6 +1103,10 @@ Environment Flags:
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	frozen := false
+	if globalStateMesh != nil {
+		frozen, _, _ = globalStateMesh.IsFleetFrozen(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1109,7 +1115,42 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		"mode":                   getRunningMode(),
 		"strict_auth":            strictAuthEnabled,
 		"require_intent_mandate": requireIntentMandate,
+		"fleet_frozen":           frozen,
 		"timestamp":              time.Now().Format(time.RFC3339),
+	})
+}
+
+func fleetFreezeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if globalStateMesh != nil {
+		_ = globalStateMesh.SetFleetFreeze(r.Context(), true, "Operator Emergency Kill Switch activated")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "FROZEN",
+		"fleet_frozen": true,
+		"message":      "Swarm-wide emergency freeze activated across Go Edge Gateway.",
+	})
+}
+
+func fleetResumeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if globalStateMesh != nil {
+		_ = globalStateMesh.SetFleetFreeze(r.Context(), false, "")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "ACTIVE",
+		"fleet_frozen": false,
+		"message":      "Fleet operations resumed across Go Edge Gateway.",
 	})
 }
 
@@ -2163,7 +2204,7 @@ func checkParameterGuardrails(action string, payload map[string]interface{}) (bo
 		}
 
 		switch upperAction {
-		case "ISSUE_REFUND", "REFUND":
+		case "ISSUE_REFUND", "REFUND", "PAYPAL_REFUND":
 			if normalizedUSD > 10000.0 {
 				return false, fmt.Sprintf("Refund amount ($%.2f USD equivalent) exceeds Sentinel maximum refund threshold ($10,000.00)", normalizedUSD)
 			}
@@ -2171,7 +2212,7 @@ func checkParameterGuardrails(action string, payload map[string]interface{}) (bo
 			if normalizedUSD > 50000.0 {
 				return false, fmt.Sprintf("Credit increase ($%.2f USD equivalent) exceeds Sentinel safety cap ($50,000.00)", normalizedUSD)
 			}
-		case "TRANSFER":
+		case "TRANSFER", "PAYPAL_PAYOUT", "PAYPAL_CREATE_ORDER":
 			if normalizedUSD > 25000.0 {
 				return false, fmt.Sprintf("Transfer amount ($%.2f USD equivalent) exceeds single-transaction ceiling ($25,000.00)", normalizedUSD)
 			}

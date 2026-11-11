@@ -289,6 +289,30 @@ func NewInProcessPolicyEngine() *InProcessPolicyEngine {
 		RequiresMandate:   false,
 		DefaultDecision:   "ALLOW",
 	}
+	engine.rules["PAYPAL_PAYOUT"] = PrecedentRule{
+		Action:            "PAYPAL_PAYOUT",
+		MaxAmount:         25000.0,
+		AllowedCurrencies: []string{"USD", "EUR", "GBP", "CAD", "AUD"},
+		RiskWeight:        0.7,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["PAYPAL_CREATE_ORDER"] = PrecedentRule{
+		Action:            "PAYPAL_CREATE_ORDER",
+		MaxAmount:         25000.0,
+		AllowedCurrencies: []string{"USD", "EUR", "GBP", "CAD", "AUD"},
+		RiskWeight:        0.4,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["PAYPAL_REFUND"] = PrecedentRule{
+		Action:            "PAYPAL_REFUND",
+		MaxAmount:         10000.0,
+		AllowedCurrencies: []string{"USD", "EUR", "GBP", "CAD", "AUD"},
+		RiskWeight:        0.5,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
 
 	return engine
 }

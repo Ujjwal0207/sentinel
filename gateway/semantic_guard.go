@@ -126,7 +126,8 @@ func (sg *SemanticGuard) InspectSemanticSafety(agentID, action string, payload m
 		originLower := strings.ToLower(strings.TrimSpace(originHeader))
 		if strings.Contains(originLower, "untrusted") || strings.Contains(originLower, "tainted") || strings.Contains(originLower, "external_scrape") {
 			actionUpper := strings.ToUpper(action)
-			if actionUpper == "TRANSFER" || actionUpper == "WITHDRAW" || actionUpper == "CREDIT_INCREASE" {
+			if actionUpper == "TRANSFER" || actionUpper == "WITHDRAW" || actionUpper == "CREDIT_INCREASE" ||
+				actionUpper == "PAYPAL_PAYOUT" || actionUpper == "PAYPAL_CREATE_ORDER" || actionUpper == "PAYPAL_REFUND" {
 				result.IsSafe = false
 				result.RiskCategory = "TAINTED_ORIGIN"
 				result.AnomalyScore = 1.0

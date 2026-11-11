@@ -26,6 +26,10 @@ p, finance_tier, Authorize_Transaction, execute
 p, finance_tier, AUTHORIZE_TRANSACTION, execute
 p, refund_tier, Authorize_Transaction, execute
 p, refund_tier, AUTHORIZE_TRANSACTION, execute
+p, refund_tier, PAYPAL_REFUND, execute
+p, general_tier, PAYPAL_PAYOUT, execute
+p, finance_tier, PAYPAL_PAYOUT, execute
+p, finance_tier, PAYPAL_CREATE_ORDER, execute
 
 # Map specific agents to roles
 g, ag_Travel_Bot, refund_tier
