@@ -244,6 +244,51 @@ func NewInProcessPolicyEngine() *InProcessPolicyEngine {
 		RequiresMandate:   false,
 		DefaultDecision:   "ALLOW",
 	}
+	engine.rules["EXECUTE_SQL"] = PrecedentRule{
+		Action:            "EXECUTE_SQL",
+		MaxAmount:         0.0,
+		AllowedCurrencies: []string{},
+		RiskWeight:        0.2,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["EXECUTE_QUERY"] = engine.rules["EXECUTE_SQL"]
+	engine.rules["QUERY_LEDGER"] = engine.rules["EXECUTE_SQL"]
+	engine.rules["REVIEW_DISPUTE"] = PrecedentRule{
+		Action:            "REVIEW_DISPUTE",
+		MaxAmount:         0.0,
+		AllowedCurrencies: []string{},
+		RiskWeight:        0.1,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["CREATE_DISPUTE_SUMMARY"] = engine.rules["REVIEW_DISPUTE"]
+	engine.rules["LOG_CUSTOMER_DISPUTE"] = engine.rules["REVIEW_DISPUTE"]
+	engine.rules["UPDATE_CUSTOMER_NOTE"] = engine.rules["REVIEW_DISPUTE"]
+	engine.rules["PROCESS_PAYMENT"] = PrecedentRule{
+		Action:            "PROCESS_PAYMENT",
+		MaxAmount:         10000000000000000.0,
+		AllowedCurrencies: []string{"USD", "EUR", "GBP", "KWD", "JPY"},
+		RiskWeight:        0.5,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["AUTHORIZE_TRANSACTION"] = PrecedentRule{
+		Action:            "AUTHORIZE_TRANSACTION",
+		MaxAmount:         1000000.0,
+		AllowedCurrencies: []string{"USD", "EUR", "GBP", "KWD", "JPY"},
+		RiskWeight:        0.5,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
+	engine.rules["GENERATE_ITINERARY_PDF"] = PrecedentRule{
+		Action:            "GENERATE_ITINERARY_PDF",
+		MaxAmount:         0.0,
+		AllowedCurrencies: []string{},
+		RiskWeight:        0.1,
+		RequiresMandate:   false,
+		DefaultDecision:   "ALLOW",
+	}
 
 	return engine
 }
