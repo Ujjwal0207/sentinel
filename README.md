@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="#-paypal--gemini-integration-overview"><img src="https://img.shields.io/badge/💳_PayPal-Developer_Sandbox-003087?style=for-the-badge" alt="PayPal Sandbox" /></a>
-  <a href="#-paypal--gemini-integration-overview"><img src="https://img.shields.io/badge/✨_AI-Google_Gemini_3.8_Flash-2563eb?style=for-the-badge" alt="Google Gemini" /></a>
+  <a href="#-paypal--gemini-integration-overview"><img src="https://img.shields.io/badge/✨_AI-Google_Gemini_3_Flash-2563eb?style=for-the-badge" alt="Google Gemini" /></a>
   <a href="#-quick-setup-local--render"><img src="https://img.shields.io/badge/☁️_Deploy-Render_Blueprint-059669?style=for-the-badge" alt="Render" /></a>
   <a href="#-benchmark-telemetry--empirical-proof"><img src="https://img.shields.io/badge/📊_Audit-1,064_Go_%2B_13_Py_Tests-0ea5e9?style=for-the-badge" alt="Benchmarks" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-475569?style=for-the-badge" alt="MIT License" /></a>
@@ -21,7 +21,7 @@
 SENTINEL sits between **Google Gemini** (natural-language tool planner) and the **PayPal Developer Sandbox API** (`https://api-m.sandbox.paypal.com`):
 
 ```text
-  User Prompt ──▶ [1] Google Gemini (Function Calling: gemini-3.8-flash)
+  User Prompt ──▶ [1] Google Gemini (Function Calling: gemini-3-flash-preview)
                        │  Plans paypal_payout / paypal_create_order / paypal_refund_capture
                        ▼
                   [2] SENTINEL Go Edge Gateway (:8080/enforce)

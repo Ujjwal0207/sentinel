@@ -22,9 +22,9 @@ services:
       - key: PAYPAL_MODE
         value: sandbox
       - key: PAYPAL_DEFAULT_RECEIVER
-        value: sb-buyer@personal.example.com
+        value: sb-utuog53855462@personal.example.com
       - key: GEMINI_MODEL
-        value: gemini-3.8-flash
+        value: gemini-3-flash-preview
       - key: ELASTICSEARCH_INDEX
         value: sentinel-audit-events
       - key: CORS_ALLOW_ORIGINS

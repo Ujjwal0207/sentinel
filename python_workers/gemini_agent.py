@@ -28,7 +28,7 @@ except ImportError:
     from python_workers.paypal_sandbox import PayPalSandboxClient, PayPalSandboxError
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
 
 TOOL_TO_SENTINEL_ACTION = {
     "paypal_payout": "PAYPAL_PAYOUT",
@@ -47,7 +47,7 @@ GEMINI_PAYPAL_TOOLS = [
                     "properties": {
                         "recipient_email": {
                             "type": "STRING",
-                            "description": "PayPal recipient email address (e.g. sb-buyer@personal.example.com).",
+                            "description": "PayPal recipient email address (e.g. sb-utuog53855462@personal.example.com).",
                         },
                         "amount": {
                             "type": "NUMBER",
@@ -334,7 +334,7 @@ def _execute_paypal_action(
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if action == "PAYPAL_PAYOUT":
-        recipient = str(payload.get("recipient_email") or payload.get("recipient") or os.getenv("PAYPAL_DEFAULT_RECEIVER", "sb-buyer@personal.example.com"))
+        recipient = str(payload.get("recipient_email") or payload.get("recipient") or os.getenv("PAYPAL_DEFAULT_RECEIVER", "sb-utuog53855462@personal.example.com"))
         return client.create_payout(
             recipient_email=recipient,
             amount=float(payload["amount"]),
