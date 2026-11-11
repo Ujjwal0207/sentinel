@@ -48,6 +48,7 @@ func NewSemanticGuard() *SemanticGuard {
 			"disregard guardrails",
 			"override safety guidelines",
 			"system prompt override",
+			"system override",
 			"jailbreak active",
 			"dan mode enabled",
 			"developer mode enabled",
@@ -60,12 +61,13 @@ func NewSemanticGuard() *SemanticGuard {
 	}
 
 	injectionRegexes := []string{
-		`(?i)ignore\s+(all\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(instructions|directives|rules|constraints)`,
-		`(?i)disregard\s+(all\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(instructions|prompts|guardrails|constraints|directives|rules)`,
+		`(?i)ignore\s+(all\s+)?(the\s+)?(agent'?s?\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(permissions|restrictions|instructions|directives|rules|constraints)`,
+		`(?i)disregard\s+(all\s+)?(the\s+)?(agent'?s?\s+)?(previous\s+|prior\s+|above\s+|system\s+)?(instructions|prompts|guardrails|constraints|directives|rules|permissions)`,
+		`(?i)system\s+override:`,
 		`(?i)you\s+are\s+now\s+(an?\s+unrestricted|free\s+of\s+rules|in\s+developer\s+mode|dan)`,
 		`(?i)from\s+now\s+on\s+you\s+(must|will)\s+(act|pretend|behave)\s+without\s+(rules|limits)`,
 		`(?i)new\s+system\s+instruction:`,
-		`(?i)override\s+(policy|sentinel|security|threshold|system)`,
+		`(?i)override\s+(the\s+)?(agent'?s?\s+)?(policy|sentinel|security|threshold|system|permissions)`,
 		`(?i)sudo\s+mode\s+activated`,
 	}
 	for _, p := range injectionRegexes {
