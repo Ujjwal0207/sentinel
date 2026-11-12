@@ -58,4 +58,4 @@ services:
         fromService:
           type: web
           name: sentinel-api
-          property: host
+          envVarKey: RENDER_EXTERNAL_URL

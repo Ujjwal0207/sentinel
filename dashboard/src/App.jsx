@@ -40,12 +40,20 @@ const sentinelGridTheme = themeQuartz.withPart(colorSchemeDark).withParams({
   headerFontSize: 12,
 });
 
-// Configurable API base URL: supports local dev (`http://localhost:8000`) and Render `property: host`
-const rawApiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8000').trim();
-const API_BASE =
-  rawApiBase.startsWith('http://') || rawApiBase.startsWith('https://')
-    ? rawApiBase.replace(/\/+$/, '')
-    : `https://${rawApiBase.replace(/\/+$/, '')}`;
+// Configurable API base URL: supports local dev (`http://localhost:8000`), full Render URLs, or bare Render slugs
+const rawApiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8000').trim().replace(/\/+$/, '');
+const normalizeApiBase = (value) => {
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    return value;
+  }
+  const hostPort = value.split('/')[0];
+  const hostOnly = hostPort.split(':')[0];
+  if (!hostOnly.includes('.') && hostOnly !== 'localhost') {
+    return `https://${value}.onrender.com`;
+  }
+  return `https://${value}`;
+};
+const API_BASE = normalizeApiBase(rawApiBase);
 
 // Fallback sample ledger shown ONLY when backend API is unreachable
 const SAMPLE_OFFLINE_LOGS = [
